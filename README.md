@@ -1,25 +1,42 @@
+# WORKISM 🚀
 
-  # Premium AI Learning Platform
+### Learn. Build. Prove. Get Certified.
 
-  This is a code bundle for Premium AI Learning Platform. The original project is available at https://www.figma.com/design/j0bD1MHMytbMpBNeDyXb8m/Premium-AI-Learning-Platform.
+WORKISM is an AI-powered skill development and certification platform designed to measure what learners can actually build—not just what they can memorize.
 
-  ## Running the code
+Users learn technical skills through structured AI-guided lessons, complete real-world projects, submit their work through GitHub, and receive an evidence-based evaluation combining automated analysis with AI-powered code review.
 
-  Run `npm i` to install the dependencies.
+## ✨ Features
 
-  Run `npm run dev` to start the development server.
+- 🤖 AI-powered learning and tutoring
+- 💻 Real-world skill-based projects
+- 🔗 GitHub repository integration
+- 🧪 Automated testing and project analysis
+- 🔐 Security and code-quality checks
+- 🧠 Local LLM-powered code evaluation
+- 📊 Transparent skill scoring
+- 💡 AI-powered "Where to Improve" recommendations
+- 📈 Learning progress tracking
+- 🎓 Verifiable digital certificates
+- 🔍 Certificate verification
 
-  ## Backend
+## 🔄 How It Works
 
-  A FastAPI backend has been added in `backend/`.
-
-  ```powershell
-  cd backend
-  python -m venv .venv
-  .\.venv\Scripts\Activate.ps1
-  pip install -r requirements.txt
-  uvicorn main:app --reload --port 8000
-  ```
-
-  API docs are available at `http://127.0.0.1:8000/docs`.
-  
+```text
+Learn
+  ↓
+Practice
+  ↓
+Build a Real Project
+  ↓
+Submit GitHub Repository
+  ↓
+Automated Analysis
+  ↓
+AI Evaluation
+  ↓
+Score + Feedback
+  ↓
+Improve
+  ↓
+Get Certified
