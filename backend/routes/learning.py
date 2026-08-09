@@ -3,6 +3,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from models.schemas import ProgressRequest
+from models.schemas import AiTutorRequest
+from ai.ollama_client import AIProviderUnavailable, ai_provider
 from services.firebase_auth import verify_firebase_token
 from services.firestore import collection, doc_to_dict, now_iso
 
@@ -32,3 +34,20 @@ def save_learning_progress(payload: ProgressRequest, firebase_user: dict[str, An
     data["updated_at"] = now_iso()
     collection("learning_progress").document(doc_id).set(data, merge=True)
     return doc_to_dict(collection("learning_progress").document(doc_id).get())
+
+
+@router.post("/ai-tutor")
+def ai_tutor(payload: AiTutorRequest, _: dict[str, Any] = Depends(verify_firebase_token)) -> dict[str, str]:
+    prompt = f"""
+You are the WORKISM AI Tutor. Teach step by step, be concise, include practical examples when useful, and answer the learner's exact question.
+
+Lesson context:
+{payload.context}
+
+Learner question:
+{payload.message}
+"""
+    try:
+        return {"answer": ai_provider.generate(prompt)}
+    except AIProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail="AI tutor is not configured or reachable. Configure the backend LLM provider.") from exc

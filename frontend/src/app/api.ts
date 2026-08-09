@@ -1,4 +1,4 @@
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
 const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
@@ -54,8 +54,38 @@ export type GithubConnection = {
   name?: string;
 };
 
+export type DashboardStats = {
+  skillsInProgress: number;
+  completedLessons: number;
+  projectsSubmitted: number;
+  evaluationsCompleted: number;
+  averageScore: number;
+  certificatesEarned: number;
+};
+
+export type LearningProgressRecord = {
+  id?: string;
+  user_id: string;
+  skill_id: string;
+  module_id: string;
+  completed: boolean;
+  updated_at?: string;
+};
+
+export type RepositoryMetadata = {
+  owner: string;
+  repo: string;
+  full_name?: string;
+  default_branch?: string;
+  selected_branch: string;
+  latest_commit?: string;
+  html_url?: string;
+  private?: boolean;
+  languages?: Record<string, number>;
+};
+
 export type SubmissionResult = {
-  submission: { id: string };
+  submission: { id: string; evaluation_id?: string };
   evaluation: WorkismEvaluation;
 };
 
@@ -66,7 +96,7 @@ export function isApiConfigured() {
 }
 
 export function apiConfigurationMessage() {
-  return "Backend API URL is not configured. Set VITE_API_URL in Vercel.";
+  return "Backend API URL is not configured. Set VITE_API_URL in Vercel to enable AI tutor, GitHub repository validation, project submission, evaluation, and certificates.";
 }
 
 async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
@@ -98,16 +128,7 @@ async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
 }
 
 export async function ensureDemoUser(): Promise<WorkismUser> {
-  const saved = localStorage.getItem("workism_user");
-  if (saved) return JSON.parse(saved) as WorkismUser;
-
-  const email = `demo+${Date.now()}@workism.local`;
-  const user = await api<WorkismUser>("/auth/register", {
-    method: "POST",
-    body: { name: "Vijay A", email, password: "workism-demo" },
-  });
-  localStorage.setItem("workism_user", JSON.stringify(user));
-  return user;
+  throw new Error("Demo authentication has been removed. Sign in with Firebase Authentication.");
 }
 
 export function logoutDemoUser() {
@@ -144,6 +165,30 @@ export async function syncFirebaseUser(user: WorkismUser, idToken: string): Prom
   return synced;
 }
 
+export async function getUserProfile(uid: string): Promise<WorkismUser | null> {
+  const profile = await getDoc(doc(db, "users", uid));
+  if (!profile.exists()) return null;
+  return { id: uid, ...profile.data() } as WorkismUser;
+}
+
+export async function saveUserProfile(user: WorkismUser): Promise<WorkismUser> {
+  const profileRef = doc(db, "users", user.id);
+  const profile = {
+    name: user.name.trim(),
+    email: user.email.trim().toLowerCase(),
+    age: user.age,
+    mobileNumber: user.mobileNumber,
+    gender: user.gender,
+    ...(user.github ? { github: user.github } : {}),
+    updatedAt: serverTimestamp(),
+  };
+  const existing = await getDoc(profileRef);
+  await setDoc(profileRef, { ...profile, ...(!existing.exists() ? { createdAt: serverTimestamp() } : {}) }, { merge: true });
+  const saved = { ...user, ...profile };
+  localStorage.setItem("workism_user", JSON.stringify(saved));
+  return saved;
+}
+
 export function saveGithubToken(token: string) {
   localStorage.setItem(GITHUB_TOKEN_KEY, token);
 }
@@ -164,6 +209,28 @@ export async function getGithubProfile() {
   return profile;
 }
 
+export async function connectGithubAccount() {
+  return api<{ auth_url: string; state: string }>("/github/connect", { method: "POST" });
+}
+
+export async function listGithubRepositories() {
+  return api<Array<{ full_name: string; html_url: string; private?: boolean; default_branch?: string }>>("/github/repositories");
+}
+
+export async function validateGithubRepository(repositoryUrl: string, branch?: string) {
+  return api<RepositoryMetadata>("/github/repository-url", {
+    method: "POST",
+    body: { repository_url: repositoryUrl, branch: branch || undefined },
+  });
+}
+
+export async function listRepositoryBranches(repositoryUrl: string) {
+  return api<Array<{ name: string; commit?: { sha?: string } }>>("/github/repository-branches", {
+    method: "POST",
+    body: { repository_url: repositoryUrl },
+  });
+}
+
 export async function submitPythonProject(repositoryUrl: string, branch: string) {
   return api<SubmissionResult>("/submissions", {
     method: "POST",
@@ -176,7 +243,7 @@ export async function submitPythonProject(repositoryUrl: string, branch: string)
   });
 }
 
-export async function evaluateSubmission(submissionId: number) {
+export async function evaluateSubmission(submissionId: string) {
   return api<WorkismEvaluation>("/evaluations", {
     method: "POST",
     body: { submission_id: submissionId },
@@ -196,4 +263,49 @@ export async function verifyCertificate(certificateId: string) {
 
 export function certificateDownloadUrl(certificateId: string) {
   return `${API_BASE_URL}/certificates/${certificateId}/download`;
+}
+
+export async function getLearningProgress(userId: string) {
+  const result = await getDocs(query(collection(db, "learning_progress"), where("user_id", "==", userId)));
+  return result.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() })) as LearningProgressRecord[];
+}
+
+export async function saveLearningProgress(record: LearningProgressRecord) {
+  const docId = `${record.user_id}_${record.skill_id}_${record.module_id}`;
+  const payload = {
+    ...record,
+    updated_at: new Date().toISOString(),
+    ...(record.completed ? { completed_at: new Date().toISOString() } : {}),
+  };
+  await setDoc(doc(db, "learning_progress", docId), payload, { merge: true });
+  return { id: docId, ...payload };
+}
+
+export async function getDashboardStats(userId: string): Promise<DashboardStats> {
+  const [progress, submissions, evaluations, certificates] = await Promise.all([
+    getDocs(query(collection(db, "learning_progress"), where("user_id", "==", userId))),
+    getDocs(query(collection(db, "submissions"), where("user_id", "==", userId))),
+    getDocs(query(collection(db, "evaluations"), where("user_id", "==", userId))),
+    getDocs(query(collection(db, "certificates"), where("user_id", "==", userId))),
+  ]);
+  const completedLessons = progress.docs.filter(item => Boolean(item.data().completed)).length;
+  const skillsInProgress = new Set(progress.docs.map(item => String(item.data().skill_id || ""))).size;
+  const scores = evaluations.docs
+    .map(item => Number(item.data().total_score ?? item.data().final_score ?? 0))
+    .filter(score => Number.isFinite(score) && score > 0);
+  return {
+    skillsInProgress,
+    completedLessons,
+    projectsSubmitted: submissions.size,
+    evaluationsCompleted: evaluations.size,
+    averageScore: scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : 0,
+    certificatesEarned: certificates.size,
+  };
+}
+
+export async function askAiTutor(message: string, context: string) {
+  return api<{ answer: string }>("/learning/ai-tutor", {
+    method: "POST",
+    body: { message, context },
+  });
 }

@@ -52,6 +52,16 @@ class RepositoryMetadataRequest(BaseModel):
     branch: str | None = None
 
 
+class RepositoryUrlRequest(BaseModel):
+    repository_url: HttpUrl
+    branch: str | None = None
+
+
+class AiTutorRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
+    context: str = Field(default="", max_length=2000)
+
+
 class SubmissionRequest(BaseModel):
     skill_id: str
     assessment_id: str | None = None

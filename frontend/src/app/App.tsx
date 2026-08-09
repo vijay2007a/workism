@@ -2,11 +2,15 @@ import React, { useState, useEffect, useRef } from "react";
 import { motion } from "motion/react";
 import {
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   getAdditionalUserInfo,
+  GoogleAuthProvider,
+  GithubAuthProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updatePassword,
   updateProfile,
   type User as FirebaseUser,
   type UserCredential,
@@ -30,21 +34,36 @@ import {
 } from "./components/ui/sheet";
 import {
   certificateDownloadUrl,
+  clearGithubToken,
+  askAiTutor,
   evaluateSubmission,
   generateCertificate,
+  getDashboardStats,
+  getStoredGithubProfile,
+  getLearningProgress,
+  getUserProfile,
+  isApiConfigured,
+  listGithubRepositories,
+  listRepositoryBranches,
+  saveGithubToken,
+  saveLearningProgress,
+  saveUserProfile,
   submitPythonProject,
   syncFirebaseUser,
+  validateGithubRepository,
+  type DashboardStats,
   type Gender,
   type WorkismCertificate,
   type WorkismEvaluation,
   type GithubProfile,
   type WorkismUser,
 } from "./api";
-import { auth, githubProvider } from "./firebase";
+import { auth, githubProvider, googleProvider } from "./firebase";
 
 type Screen =
   | "landing"
   | "auth"
+  | "profile"
   | "dashboard"
   | "skills"
   | "learning"
@@ -114,6 +133,7 @@ type WorkismRuntime = {
   user: WorkismUser | null;
   evaluation: WorkismEvaluation | null;
   certificate: WorkismCertificate | null;
+  refreshUser: () => Promise<void>;
   setUser: (user: WorkismUser | null) => void;
   setEvaluation: (evaluation: WorkismEvaluation | null) => void;
   setCertificate: (certificate: WorkismCertificate | null) => void;
@@ -885,33 +905,76 @@ function DashboardLayout({ screen, children, onNavigate, user, onLogout }: { scr
 
 // ─── Dashboard Home ────────────────────────────────────────────────────────────
 
-function DashboardHome({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+function DashboardHome({
+  onNavigate,
+  user,
+}: {
+  onNavigate: (s: Screen) => void;
+  user: WorkismUser | null;
+}) {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      if (!user) return;
+      try {
+        setError("");
+        const nextStats = await getDashboardStats(user.id);
+        if (active) setStats(nextStats);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load dashboard stats");
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  const displayStats = stats || {
+    skillsInProgress: 0,
+    completedLessons: 0,
+    projectsSubmitted: 0,
+    evaluationsCompleted: 0,
+    averageScore: 0,
+    certificatesEarned: 0,
+  };
+
+  const statCards = [
+    { label: "Skills in Progress", value: displayStats.skillsInProgress, suffix: "", icon: Layers, color: "#7c3aed" },
+    { label: "Lessons Completed", value: displayStats.completedLessons, suffix: "", icon: BookOpen, color: "#3b82f6" },
+    { label: "Projects Submitted", value: displayStats.projectsSubmitted, suffix: "", icon: FolderGit2, color: "#10b981" },
+    { label: "Evaluations", value: displayStats.evaluationsCompleted, suffix: "", icon: BarChart3, color: "#f59e0b" },
+    { label: "Certificates Earned", value: displayStats.certificatesEarned, suffix: "", icon: Award, color: "#ef4444" },
+  ];
+
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "Outfit" }}>Welcome back, Vijay! 👋</h1>
+        <h1 className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "Outfit" }}>Welcome back, {user?.name || "learner"}!</h1>
         <p className="text-white/45 text-sm">Continue your learning journey and achieve new milestones.</p>
       </div>
 
       {/* Stats cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {[
-          { label: "Skills in Progress", value: "3", icon: Layers, color: "#7c3aed" },
-          { label: "Projects Completed", value: "12", icon: FolderGit2, color: "#3b82f6" },
-          { label: "Average Score", value: "87%", icon: TrendingUp, color: "#10b981" },
-          { label: "Certificates Earned", value: "5", icon: Award, color: "#f59e0b" },
-        ].map(stat => (
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+        {statCards.map(stat => (
           <GlassPanel key={stat.label} className="p-5 hover:border-violet-500/25 transition-all duration-300 hover:shadow-[0_0_20px_rgba(124,58,237,0.08)]">
             <div className="flex items-start justify-between mb-3">
               <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${stat.color}18` }}>
                 <stat.icon className="w-[18px] h-[18px]" style={{ color: stat.color }} />
               </div>
             </div>
-            <div className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "Outfit" }}>{stat.value}</div>
+            <div className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "Outfit" }}>
+              {typeof stat.value === "number" ? `${stat.value}${stat.suffix}` : stat.value}
+            </div>
             <div className="text-xs text-white/40">{stat.label}</div>
           </GlassPanel>
         ))}
       </div>
+
+      {error && <div className="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">{error}</div>}
 
       <div className="grid lg:grid-cols-2 gap-6 mb-6">
         {/* Continue Learning */}
@@ -1093,75 +1156,197 @@ function SkillsPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
 
 // ─── Learning Page ────────────────────────────────────────────────────────────
 
-function LearningPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
-  const [activeModule] = useState(4);
+function LearningPage({
+  onNavigate,
+  user,
+}: {
+  onNavigate: (s: Screen) => void;
+  user: WorkismUser | null;
+}) {
+  const [modules, setModules] = useState(MODULES_DATA.map(module => ({ ...module })));
+  const [activeModuleId, setActiveModuleId] = useState(4);
   const [aiInput, setAiInput] = useState("");
-  const [aiMessages] = useState([
-    { role: "ai", text: "Functions allow you to break down complex problems into smaller, reusable pieces. Want me to explain with an example?" },
-    { role: "user", text: "Yes, please show me a simple function example." },
-    { role: "ai", text: "Sure! Here's a basic function: def greet(name): return f'Hello, {name}!' — it takes a name and returns a greeting string." },
-  ]);
+  const [aiMessages, setAiMessages] = useState([
+    { role: "ai", text: "Functions let you split a problem into reusable pieces. Ask me anything about the current lesson and I’ll walk you through it step by step." },
+  ] as Array<{ role: "ai" | "user"; text: string }>);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [progressError, setProgressError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const loadProgress = async () => {
+      if (!user) return;
+      try {
+        setProgressError("");
+        const records = await getLearningProgress(user.id);
+        const completedIds = new Set(records.filter(record => record.completed).map(record => Number(record.module_id)));
+        setModules(MODULES_DATA.map(module => ({
+          ...module,
+          completed: completedIds.has(module.id),
+          active: module.id === activeModuleId,
+        })));
+      } catch (err) {
+        if (active) setProgressError(err instanceof Error ? err.message : "Could not load learning progress");
+      }
+    };
+    void loadProgress();
+    return () => {
+      active = false;
+    };
+  }, [activeModuleId, user]);
+
+  const activeModule = modules.find(module => module.id === activeModuleId) || modules[0];
+  const activeIndex = Math.max(0, modules.findIndex(module => module.id === activeModuleId));
+  const completedCount = modules.filter(module => module.completed).length;
+  const progress = Math.round((completedCount / modules.length) * 100);
+  const lessonContent = {
+    title: activeModule.title,
+    overview:
+      activeModule.id === 4
+        ? "Functions help you organize logic into reusable blocks. They make code easier to test, read, and extend."
+        : "This lesson builds on the same pattern: concept first, example second, then a quick practice step.",
+    example:
+      activeModule.id === 4
+        ? [
+            "def greet(name):",
+            "    return f'Hello, {name}!'",
+            "",
+            "print(greet('Vijay'))",
+          ]
+        : [
+            "def add(a, b):",
+            "    return a + b",
+            "",
+            "print(add(3, 5))",
+          ],
+    points:
+      activeModule.id === 1
+        ? ["What a function does", "Why reuse matters", "How lessons fit into a module"]
+        : activeModule.id === 2
+          ? ["Parameters and arguments", "Built-in data types", "Choosing the right type"]
+          : activeModule.id === 3
+            ? ["if/elif/else", "Boolean logic", "Looping through branches"]
+            : activeModule.id === 4
+              ? ["Defining functions", "Return values", "Calling reusable code"]
+              : activeModule.id === 5
+                ? ["Classes and objects", "Constructors", "Encapsulation"]
+                : activeModule.id === 6
+                  ? ["Importing modules", "Organizing packages", "Standard library usage"]
+                  : activeModule.id === 7
+                    ? ["Reading and writing files", "Context managers", "Safe file handling"]
+                    : ["Catch exceptions", "Handle errors gracefully", "Avoid crashing your program"],
+  };
+
+  const markComplete = async () => {
+    if (!user) return;
+    try {
+      setProgressError("");
+      await saveLearningProgress({
+        user_id: user.id,
+        skill_id: "python",
+        module_id: String(activeModule.id),
+        completed: true,
+      });
+      setModules(current =>
+        current.map(module => (module.id === activeModule.id ? { ...module, completed: true } : module)),
+      );
+      if (activeModuleId < modules[modules.length - 1].id) {
+        setActiveModuleId(activeModuleId + 1);
+      }
+    } catch (err) {
+      setProgressError(err instanceof Error ? err.message : "Could not save lesson progress");
+    }
+  };
+
+  const sendAiMessage = async () => {
+    const message = aiInput.trim();
+    if (!message) return;
+    if (!isApiConfigured()) {
+      setAiError(apiConfigurationMessage());
+      return;
+    }
+    setAiBusy(true);
+    setAiError("");
+    setAiMessages(current => [...current, { role: "user", text: message }]);
+    setAiInput("");
+    try {
+      const response = await askAiTutor(
+        message,
+        `${lessonContent.title}: ${lessonContent.overview}\n\nKey points:\n- ${lessonContent.points.join("\n- ")}`,
+      );
+      setAiMessages(current => [...current, { role: "ai", text: response.answer }]);
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "AI tutor request failed");
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
       <div className="flex items-center gap-3 mb-5">
         <button onClick={() => onNavigate("skills")} className="flex items-center gap-1.5 text-white/40 hover:text-white/70 transition-colors text-sm">
-          <ChevronLeft className="w-4 h-4" /> Back to Learn
+          <ChevronLeft className="w-4 h-4" /> Back to Skills
         </button>
         <div className="ml-auto flex items-center gap-2 text-sm text-white/40">
           Progress
           <div className="w-32 h-1.5 rounded-full bg-white/10">
-            <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-blue-500" style={{ width: "65%" }} />
+            <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-blue-500" style={{ width: `${progress}%` }} />
           </div>
-          <span className="text-violet-400 font-medium">65%</span>
+          <span className="text-violet-400 font-medium">{progress}%</span>
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-[220px_1fr_260px] gap-5 h-[calc(100vh-12rem)]">
-        {/* Module sidebar */}
+      {progressError && <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">{progressError}</div>}
+
+      <div className="grid lg:grid-cols-[220px_1fr_320px] gap-5 min-h-[calc(100vh-12rem)]">
         <GlassPanel className="flex flex-col overflow-hidden">
           <div className="p-4 border-b border-white/5">
             <div className="text-xs font-semibold text-white/50 uppercase tracking-widest">Modules</div>
           </div>
           <div className="flex-1 overflow-y-auto p-3">
-            {MODULES_DATA.map(mod => (
-              <div key={mod.id}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 cursor-pointer transition-colors ${mod.active
+            {modules.map(module => (
+              <button
+                key={module.id}
+                type="button"
+                onClick={() => setActiveModuleId(module.id)}
+                className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 cursor-pointer transition-colors ${module.id === activeModuleId
                   ? "bg-violet-600/20 text-violet-300 border border-violet-500/25"
-                  : mod.completed ? "text-white/50 hover:text-white/70 hover:bg-white/4" : "text-white/30 hover:text-white/50 hover:bg-white/4"}`}>
-                {mod.completed
+                  : module.completed
+                    ? "text-white/50 hover:text-white/70 hover:bg-white/4"
+                    : "text-white/30 hover:text-white/50 hover:bg-white/4"}`}
+              >
+                {module.completed
                   ? <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                  : mod.active
+                  : module.id === activeModuleId
                     ? <div className="w-4 h-4 rounded-full border-2 border-violet-400 flex-shrink-0" />
                     : <div className="w-4 h-4 rounded-full border border-white/20 flex-shrink-0" />}
-                <span className="truncate">{mod.id}. {mod.title}</span>
-              </div>
+                <span className="truncate">{module.id}. {module.title}</span>
+              </button>
             ))}
           </div>
         </GlassPanel>
 
-        {/* Lesson content */}
         <GlassPanel className="flex flex-col overflow-hidden">
           <div className="p-5 border-b border-white/5">
             <div className="text-xs text-white/35 mb-1">Python Development</div>
-            <h2 className="text-xl font-bold text-white" style={{ fontFamily: "Outfit" }}>4. Functions in Python</h2>
-            <p className="text-sm text-white/45 mt-2">Functions help you organize your code into reusable blocks. Let&apos;s see an example.</p>
+            <h2 className="text-xl font-bold text-white" style={{ fontFamily: "Outfit" }}>{activeModule.id}. {lessonContent.title}</h2>
+            <p className="text-sm text-white/45 mt-2">{lessonContent.overview}</p>
           </div>
 
           <div className="flex-1 overflow-y-auto p-5">
             <div className="mb-5">
-              <div className="text-xs font-semibold text-violet-400 uppercase tracking-widest mb-3">Python</div>
+              <div className="text-xs font-semibold text-violet-400 uppercase tracking-widest mb-3">Lesson Example</div>
               <div className="rounded-xl overflow-hidden border border-white/10" style={{ backgroundColor: "#0d1117" }}>
                 <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
                   {["#ef4444", "#f59e0b", "#10b981"].map(c => <div key={c} className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c }} />)}
-                  <span className="ml-2 text-xs text-white/25 font-mono">functions.py</span>
+                  <span className="ml-2 text-xs text-white/25 font-mono">lesson-{activeModule.id}.py</span>
                 </div>
-                <div className="p-4 font-mono text-sm leading-relaxed">
-                  <div><span className="text-violet-400">def </span><span className="text-yellow-300">add</span><span className="text-white/60">(a, b):</span></div>
-                  <div className="ml-6"><span className="text-blue-400">return </span><span className="text-white">a + b</span></div>
-                  <div className="mt-3"><span className="text-emerald-400">result </span><span className="text-white/60">= </span><span className="text-yellow-300">add</span><span className="text-white/60">(3, 5)</span></div>
-                  <div><span className="text-blue-300">print</span><span className="text-white/60">(</span><span className="text-orange-300">f"Output: </span><span className="text-white">{"{result}"}</span><span className="text-orange-300">"</span><span className="text-white/60">)</span></div>
-                  <div className="mt-3 text-white/25 text-xs"># Output: 8</div>
+                <div className="p-4 font-mono text-sm leading-relaxed text-white/85">
+                  {lessonContent.example.map((line, index) => (
+                    <div key={index} className={line ? "" : "h-4"}>{line || "\u00a0"}</div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -1170,7 +1355,7 @@ function LearningPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
               In this lesson, you will learn:
             </div>
             <div className="flex flex-col gap-2.5">
-              {["Defining functions", "Parameters and arguments", "Return statements", "Scope of variables"].map(item => (
+              {lessonContent.points.map(item => (
                 <div key={item} className="flex items-center gap-2.5">
                   <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
                   <span className="text-sm text-white/65">{item}</span>
@@ -1180,29 +1365,35 @@ function LearningPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
           </div>
 
           <div className="p-4 border-t border-white/5 flex items-center justify-between">
-            <button className="px-4 py-2 rounded-lg border border-white/10 text-sm text-white/50 hover:text-white/80 hover:border-white/20 transition-all">
+            <button onClick={markComplete} className="px-4 py-2 rounded-lg border border-white/10 text-sm text-white/50 hover:text-white/80 hover:border-white/20 transition-all">
               Mark as Complete
             </button>
             <div className="flex items-center gap-3">
-              <button className="flex items-center gap-1 text-xs text-white/30 hover:text-white/60 transition-colors">
-                Ask a question...
+              <button
+                type="button"
+                onClick={() => setActiveModuleId(Math.max(1, activeIndex))}
+                disabled={activeIndex <= 0}
+                className="flex items-center gap-1 text-xs text-white/30 hover:text-white/60 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" /> Previous
               </button>
-              <button onClick={() => onNavigate("assessment")}
-                className="flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-sm font-semibold hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_15px_rgba(124,58,237,0.3)]">
+              <button
+                onClick={() => setActiveModuleId(Math.min(modules[modules.length - 1].id, activeModuleId + 1))}
+                className="flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-sm font-semibold hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_15px_rgba(124,58,237,0.3)]"
+              >
                 Next Lesson <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
         </GlassPanel>
 
-        {/* AI Tutor */}
         <GlassPanel className="flex flex-col overflow-hidden">
           <div className="p-4 border-b border-white/5 flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-violet-600/25 flex items-center justify-center">
               <Brain className="w-3.5 h-3.5 text-violet-400" />
             </div>
             <div className="text-sm font-semibold text-white">AI Tutor</div>
-            <div className="ml-auto w-2 h-2 rounded-full bg-emerald-400" />
+            <div className={`ml-auto w-2 h-2 rounded-full ${aiBusy ? "bg-amber-400" : "bg-emerald-400"}`} />
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
@@ -1217,11 +1408,28 @@ function LearningPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
             ))}
           </div>
 
+          {aiError && <div className="mx-4 mb-3 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-[11px] text-red-200">{aiError}</div>}
+
           <div className="p-3 border-t border-white/5">
             <div className="flex items-center gap-2 bg-white/[0.04] border border-white/10 rounded-lg px-3 py-2">
-              <input value={aiInput} onChange={e => setAiInput(e.target.value)} placeholder="Ask the AI tutor..."
-                className="flex-1 text-xs text-white/60 placeholder:text-white/25 bg-transparent focus:outline-none" />
-              <button className="w-6 h-6 rounded-md bg-violet-600/30 flex items-center justify-center hover:bg-violet-600/50 transition-colors">
+              <input
+                value={aiInput}
+                onChange={e => setAiInput(e.target.value)}
+                onKeyDown={event => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void sendAiMessage();
+                  }
+                }}
+                placeholder="Ask the AI tutor..."
+                className="flex-1 text-xs text-white/60 placeholder:text-white/25 bg-transparent focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => void sendAiMessage()}
+                disabled={aiBusy}
+                className="w-6 h-6 rounded-md bg-violet-600/30 flex items-center justify-center hover:bg-violet-600/50 transition-colors disabled:opacity-50"
+              >
                 <Send className="w-3 h-3 text-violet-400" />
               </button>
             </div>
@@ -1364,17 +1572,80 @@ function AssessmentPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
 function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
   const { user, setEvaluation, onNavigate } = runtime;
   const [repo, setRepo] = useState("");
-  const [branch, setBranch] = useState("main");
+  const [branch, setBranch] = useState("");
+  const [repositoryInfo, setRepositoryInfo] = useState<RepositoryMetadata | null>(null);
+  const [repositories, setRepositories] = useState<Array<{ full_name: string; html_url: string; private?: boolean; default_branch?: string }>>([]);
+  const [branches, setBranches] = useState<Array<{ name: string; commit?: { sha?: string } }>>([]);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [repoBusy, setRepoBusy] = useState(false);
   const [error, setError] = useState("");
+  const [repoError, setRepoError] = useState("");
+  const githubProfile = getStoredGithubProfile();
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void (async () => {
+      try {
+        if (!isApiConfigured()) return;
+        const repos = await listGithubRepositories();
+        setRepositories(repos);
+      } catch (err) {
+        setRepoError(err instanceof Error ? err.message : "Could not load GitHub repositories");
+      }
+    })();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (repositoryInfo?.default_branch && !branch) {
+      setBranch(repositoryInfo.default_branch);
+    }
+  }, [branch, repositoryInfo]);
 
   const checklist = [
-    { label: repo ? "Repository URL provided" : "Development sample ready", done: true },
-    { label: "README check handled by backend/GitHub metadata", done: true },
-    { label: "Source code packaged for evaluation", done: true },
-    { label: "Hybrid automated + AI evaluation enabled", done: true },
+    { label: repo ? "Repository URL provided" : "Enter a GitHub repository", done: Boolean(repo.trim()) },
+    { label: repositoryInfo ? "Repository validated" : "Validate repository access", done: Boolean(repositoryInfo) },
+    { label: branches.length > 0 ? "Branch list loaded" : "Select a branch", done: Boolean(branches.length) },
+    { label: "Automated + AI evaluation ready", done: Boolean(repositoryInfo) },
   ];
+
+  const handleLoadRepository = async () => {
+    const trimmed = repo.trim();
+    if (!trimmed) {
+      setRepoError("Enter a repository URL first.");
+      return;
+    }
+    if (!isApiConfigured()) {
+      setRepoError(apiConfigurationMessage());
+      return;
+    }
+    setRepoBusy(true);
+    setRepoError("");
+    setStatus("Validating repository...");
+    try {
+      const metadata = await validateGithubRepository(trimmed, branch || undefined);
+      setRepositoryInfo(metadata);
+      setBranch(metadata.selected_branch);
+      const branchList = await listRepositoryBranches(trimmed);
+      setBranches(branchList);
+      if (!branchList.some(item => item.name === metadata.selected_branch) && branchList[0]?.name) {
+        setBranch(branchList[0].name);
+      }
+      setStatus(`Repository ${metadata.full_name || metadata.owner + "/" + metadata.repo} is ready.`);
+    } catch (err) {
+      setRepositoryInfo(null);
+      setBranches([]);
+      setRepoError(err instanceof Error ? err.message : "Repository validation failed");
+    } finally {
+      setRepoBusy(false);
+      setTimeout(() => setStatus(""), 2500);
+    }
+  };
+
+  const handleSelectRepository = (htmlUrl: string, defaultBranch?: string) => {
+    setRepo(htmlUrl);
+    setBranch(defaultBranch || "main");
+  };
 
   const handleSubmit = async () => {
     setBusy(true);
@@ -1384,11 +1655,21 @@ function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
         onNavigate("auth");
         return;
       }
+      if (!isApiConfigured()) {
+        throw new Error(apiConfigurationMessage());
+      }
+      const metadata = repositoryInfo || await validateGithubRepository(repo.trim(), branch || undefined);
+      setRepositoryInfo(metadata);
+      if (!branches.length) {
+        const branchList = await listRepositoryBranches(repo.trim());
+        setBranches(branchList);
+      }
+      const selectedBranch = branch || metadata.selected_branch || metadata.default_branch || "main";
       setStatus("Submitting project...");
-      const submission = await submitPythonProject(repo.trim(), branch);
+      const submission = await submitPythonProject(metadata.html_url || repo.trim(), selectedBranch);
       localStorage.setItem("workism_last_submission", JSON.stringify(submission));
       setStatus("Running evaluation...");
-      const evaluation = await evaluateSubmission(submission.id);
+      const evaluation = await evaluateSubmission(submission.submission.id);
       localStorage.setItem("workism_last_evaluation", JSON.stringify(evaluation));
       setEvaluation(evaluation);
       onNavigate("evaluation");
@@ -1408,11 +1689,19 @@ function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
         </button>
       </div>
 
-      <div className="max-w-3xl">
+      <div className="max-w-4xl">
         <h1 className="text-2xl font-bold text-white mb-6" style={{ fontFamily: "Outfit" }}>Submit Your Project</h1>
 
+        {githubProfile && (
+          <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-emerald-200">
+            Connected GitHub account: {githubProfile.login}
+          </div>
+        )}
+
+        {repoError && <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{repoError}</div>}
+        {status && <div className="mb-4 rounded-xl border border-violet-500/20 bg-violet-500/10 p-3 text-xs text-violet-200">{status}</div>}
+
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Left */}
           <div className="flex flex-col gap-5">
             <GlassPanel className="p-6">
               <h3 className="text-sm font-semibold text-white mb-4" style={{ fontFamily: "Outfit" }}>Connect GitHub</h3>
@@ -1421,12 +1710,47 @@ function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
                   <Github className="w-5 h-5 text-white" />
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm font-medium text-white">{user?.name || "Demo learner"}</div>
-                  <div className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Backend session ready</div>
+                  <div className="text-sm font-medium text-white">{user?.name || "Signed-in learner"}</div>
+                  <div className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Firebase session ready</div>
                 </div>
-                <button className="px-3 py-1.5 rounded-lg border border-white/10 text-xs text-white/50 hover:border-red-500/30 hover:text-red-400 transition-all">
-                  OAuth later
+              </div>
+
+              <div className="grid gap-3">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setRepoBusy(true);
+                      const repos = await listGithubRepositories();
+                      setRepositories(repos);
+                      setRepoError("");
+                    } catch (err) {
+                      setRepoError(err instanceof Error ? err.message : "Could not load GitHub repositories");
+                    } finally {
+                      setRepoBusy(false);
+                    }
+                  }}
+                  className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-white/70 hover:border-violet-500/25 hover:text-white disabled:opacity-60"
+                  disabled={!isApiConfigured() || repoBusy}
+                >
+                  {repoBusy ? "Loading repositories..." : "Load my repositories"}
                 </button>
+
+                {repositories.length > 0 && (
+                  <div className="max-h-44 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.02] p-2">
+                    {repositories.map(repository => (
+                      <button
+                        key={repository.full_name}
+                        type="button"
+                        onClick={() => handleSelectRepository(repository.html_url, repository.default_branch)}
+                        className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-white/70 hover:bg-white/[0.04]"
+                      >
+                        <span className="truncate">{repository.full_name}</span>
+                        <span className="text-[10px] text-white/35">{repository.private ? "Private" : "Public"}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </GlassPanel>
 
@@ -1443,15 +1767,25 @@ function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
                   <label className="text-xs text-white/40 mb-1.5 block">Branch</label>
                   <select value={branch} onChange={e => setBranch(e.target.value)}
                     className="w-full bg-white/[0.04] border border-white/10 rounded-lg text-sm text-white px-3 py-2.5 focus:outline-none focus:border-violet-500/40 appearance-none">
-                    <option value="main">main</option>
-                    <option value="develop">develop</option>
+                    <option value="" className="bg-[#0d0d28]">Select a branch</option>
+                    {branches.map(item => (
+                      <option key={item.name} value={item.name} className="bg-[#0d0d28]">{item.name}</option>
+                    ))}
+                    {!branches.length && <option value="main" className="bg-[#0d0d28]">main</option>}
                   </select>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void handleLoadRepository()}
+                  disabled={repoBusy}
+                  className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-4 py-2 text-sm text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+                >
+                  {repoBusy ? "Checking..." : "Validate repository"}
+                </button>
               </div>
             </GlassPanel>
           </div>
 
-          {/* Right */}
           <div className="flex flex-col gap-5">
             <GlassPanel className="p-6">
               <h3 className="text-sm font-semibold text-white mb-4" style={{ fontFamily: "Outfit" }}>Submission Checklist</h3>
@@ -1466,7 +1800,7 @@ function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
                 ))}
               </div>
               <div className="mt-4 pt-4 border-t border-white/5 text-xs text-white/30">
-                All checks passed. Your repository is ready for evaluation.
+                {repositoryInfo ? "Repository validated and ready for evaluation." : "Validate the repository before submitting."}
               </div>
             </GlassPanel>
 
@@ -1476,16 +1810,15 @@ function SubmissionPage({ runtime }: { runtime: WorkismRuntime }) {
                 <div>
                   <div className="text-sm font-medium text-white mb-1">AI Evaluation in ~3 min</div>
                   <div className="text-xs text-white/45 leading-relaxed">
-                    Once submitted, our AI engine analyzes your code across 6 quality dimensions and delivers a detailed report.
+                    Once submitted, our backend checks repository access, branch data, README/code signals, quality checks, and AI feedback.
                   </div>
                 </div>
               </div>
             </GlassPanel>
 
             {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
-            {status && <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-3 text-xs text-violet-200">{status}</div>}
 
-            <MagButton onClick={handleSubmit}
+            <MagButton onClick={() => void handleSubmit()}
               className="w-full py-3.5 rounded-xl font-semibold text-white bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_20px_rgba(124,58,237,0.35)] text-sm flex items-center justify-center gap-2">
               <Github className="w-4 h-4" /> {busy ? "Evaluating..." : "Submit Project"}
             </MagButton>
@@ -1506,6 +1839,13 @@ function EvaluationPage({ runtime }: { runtime: WorkismRuntime }) {
   const [error, setError] = useState("");
   const score = evaluation?.total_score ?? 85;
   const passed = evaluation ? Boolean(evaluation.passed) : true;
+  const stages = [
+    { label: "Repository validation", done: Boolean(evaluation) },
+    { label: "README/code checks", done: Boolean(evaluation?.objective?.readme || evaluation?.objective?.syntax) },
+    { label: "Automated quality checks", done: Boolean(evaluation?.objective) },
+    { label: "AI evaluation", done: Boolean(evaluation?.ai) },
+    { label: "Final evaluation report", done: Boolean(evaluation) },
+  ];
   const breakdown = parseBreakdown(evaluation?.breakdown);
   const strengths = parseStoredList(evaluation?.strengths, ["Clean API architecture", "Comprehensive test coverage", "Good README documentation"]);
   const improvements = parseStoredList(evaluation?.improvements, ["Add input validation", "Improve error messages", "Add more edge case tests"]);
@@ -1579,6 +1919,20 @@ function EvaluationPage({ runtime }: { runtime: WorkismRuntime }) {
                 <div className={`w-2 h-2 rounded-full ${passed ? "bg-emerald-400" : "bg-amber-400"}`} />
                 <span className={`text-xs font-medium ${passed ? "text-emerald-400" : "text-amber-400"}`}>{passed ? "Passed" : "Needs Improvement"}</span>
               </div>
+            </div>
+          </GlassPanel>
+
+          <GlassPanel className="p-5">
+            <h3 className="text-sm font-semibold text-white mb-4" style={{ fontFamily: "Outfit" }}>Evaluation Stages</h3>
+            <div className="flex flex-col gap-3">
+              {stages.map(stage => (
+                <div key={stage.label} className="flex items-center gap-3">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${stage.done ? "bg-emerald-500/20 border border-emerald-500/30" : "bg-white/5 border border-white/15"}`}>
+                    {stage.done && <Check className="w-3 h-3 text-emerald-400" />}
+                  </div>
+                  <span className={`text-sm ${stage.done ? "text-white/75" : "text-white/35"}`}>{stage.label}</span>
+                </div>
+              ))}
             </div>
           </GlassPanel>
         </div>
@@ -1879,7 +2233,13 @@ function CursorGlow() {
 
 // ─── Main App ──────────────────────────────────────────────────────────────────
 
-function AuthPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
+function AuthPage({
+  onNavigate,
+  onAuthenticated,
+}: {
+  onNavigate: (s: Screen) => void;
+  onAuthenticated: (user: WorkismUser, needsProfile: boolean) => void;
+}) {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [fullName, setFullName] = useState("");
   const [age, setAge] = useState("");
@@ -1934,7 +2294,7 @@ function AuthPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
       if (mode === "signup" && validation.cleanName && firebaseUser.displayName !== validation.cleanName) {
         await updateProfile(firebaseUser, { displayName: validation.cleanName });
       }
-      await syncFirebaseUser({
+      const workismUser = {
         id: firebaseUser.uid,
         name: mode === "signup" ? validation.cleanName : firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "Workism learner",
         email: firebaseUser.email || validation.cleanEmail,
@@ -1943,9 +2303,10 @@ function AuthPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
           mobileNumber: validation.cleanPhone,
           gender: gender as Gender,
         } : {}),
-      }, await firebaseUser.getIdToken());
+      } satisfies WorkismUser;
+      await syncFirebaseUser(workismUser, await firebaseUser.getIdToken());
       clearSecrets();
-      onNavigate("dashboard");
+      onAuthenticated(workismUser, mode === "signup");
     } catch (err) {
       setError(err instanceof Error ? err.message.replace("Firebase: ", "") : "Authentication failed");
     } finally {
@@ -1959,11 +2320,37 @@ function AuthPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
     setError("");
     try {
       const credential = await signInWithPopup(auth, githubProvider);
-      await syncFirebaseUser(firebaseUserToWorkismUser(credential.user, credential), await credential.user.getIdToken());
+      const token = GithubAuthProvider.credentialFromResult(credential)?.accessToken;
+      if (token) {
+        saveGithubToken(token);
+      }
+      const workismUser = firebaseUserToWorkismUser(credential.user, credential);
+      await syncFirebaseUser(workismUser, await credential.user.getIdToken());
       clearSecrets();
-      onNavigate("dashboard");
+      onAuthenticated(workismUser, false);
     } catch (err) {
-      setError(err instanceof Error ? err.message.replace("Firebase: ", "") : "GitHub sign-in failed. Check that GitHub is enabled in Firebase Authentication.");
+      console.error("GitHub authentication failed", {
+        code: firebaseErrorCode(err),
+        message: err instanceof Error ? err.message : err,
+      });
+      setError(githubAuthErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitGoogle = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const credential = await signInWithPopup(auth, googleProvider);
+      const workismUser = firebaseUserToWorkismUser(credential.user, credential);
+      await syncFirebaseUser(workismUser, await credential.user.getIdToken());
+      clearSecrets();
+      onAuthenticated(workismUser, false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message.replace("Firebase: ", "") : "Google sign-in failed");
+    } finally {
       setBusy(false);
     }
   };
@@ -2093,10 +2480,221 @@ function AuthPage({ onNavigate }: { onNavigate: (s: Screen) => void }) {
           <button onClick={submitGithub} disabled={busy} className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/70 transition-colors hover:border-violet-500/25 hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-60">
             <span className="flex items-center justify-center gap-2"><Github className="h-4 w-4" /> Continue with GitHub</span>
           </button>
+
+          <button onClick={submitGoogle} disabled={busy} className="mt-3 w-full rounded-xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/70 transition-colors hover:border-violet-500/25 hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-60">
+            <span className="flex items-center justify-center gap-2">
+              <svg viewBox="0 0 48 48" className="h-4 w-4" aria-hidden="true">
+                <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303C33.655 32.656 29.266 36 24 36c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.962 3.038l5.657-5.657C34.077 6.053 29.353 4 24 4 12.954 4 4 12.954 4 24s8.954 20 20 20 20-8.954 20-20c0-1.341-.138-2.648-.389-3.917z" />
+                <path fill="#FF3D00" d="M6.306 14.691l6.571 4.817C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.962 3.038l5.657-5.657C34.077 6.053 29.353 4 24 4c-7.391 0-13.805 4.176-17.694 10.691z" />
+                <path fill="#4CAF50" d="M24 44c5.255 0 10.062-2.013 13.686-5.294l-6.31-5.338C29.307 34.073 26.858 35 24 35c-5.245 0-9.619-3.327-11.303-7.938l-6.546 5.054C9.909 39.556 16.386 44 24 44z" />
+                <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-1.017 2.831-2.979 5.211-5.927 6.368l.005-.003 6.31 5.338C35.258 39.711 40 36 40 24c0-1.341-.138-2.648-.389-3.917z" />
+              </svg>
+              Continue with Google
+            </span>
+          </button>
         </GlassPanel>
       </div>
     </div>
   );
+}
+
+function ProfilePage({
+  user,
+  onComplete,
+  onCancel,
+}: {
+  user: WorkismUser;
+  onComplete: (user: WorkismUser) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [fullName, setFullName] = useState(user.name || "");
+  const [age, setAge] = useState(user.age ? String(user.age) : "");
+  const [mobileNumber, setMobileNumber] = useState(user.mobileNumber || "");
+  const [gender, setGender] = useState<Gender | "">(user.gender || "");
+  const [email] = useState(user.email || "");
+  const [githubUsername, setGithubUsername] = useState(user.github?.username || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setFullName(user.name || "");
+    setAge(user.age ? String(user.age) : "");
+    setMobileNumber(user.mobileNumber || "");
+    setGender(user.gender || "");
+    setGithubUsername(user.github?.username || "");
+  }, [user]);
+
+  const validate = () => {
+    const errors: Record<string, string> = {};
+    const cleanName = fullName.trim();
+    const cleanAge = Number(age);
+    const cleanPhone = mobileNumber.replace(/[\s-]/g, "");
+    const cleanGithub = githubUsername.trim();
+
+    if (!/^[A-Za-z][A-Za-z .'-]{1,78}$/.test(cleanName)) errors.fullName = "Enter a valid full name.";
+    if (!Number.isInteger(cleanAge) || cleanAge < 13 || cleanAge > 100) errors.age = "Age must be between 13 and 100.";
+    if (!/^(\+?[1-9]\d{6,14}|[6-9]\d{9})$/.test(cleanPhone)) errors.mobileNumber = "Enter a valid mobile number.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = "Email is invalid.";
+    if (!gender) errors.gender = "Choose a gender option.";
+    if (cleanGithub && !/^[A-Za-z0-9-]{1,39}$/.test(cleanGithub)) errors.githubUsername = "Use a valid GitHub username or leave it blank.";
+
+    setFieldErrors(errors);
+    return {
+      valid: Object.keys(errors).length === 0,
+      cleanName,
+      cleanAge,
+      cleanPhone,
+      cleanGithub,
+    };
+  };
+
+  const handleSave = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const validation = validate();
+    if (!validation.valid) return;
+    setBusy(true);
+    setError("");
+    try {
+      const profile: WorkismUser = {
+        id: user.id,
+        name: validation.cleanName,
+        email,
+        age: validation.cleanAge,
+        mobileNumber: validation.cleanPhone,
+        gender: gender as Gender,
+        ...(validation.cleanGithub
+          ? {
+              github: {
+                providerId: "github.com",
+                username: validation.cleanGithub,
+                email: user.github?.email || undefined,
+                githubUserId: user.github?.githubUserId,
+                displayName: user.github?.displayName,
+                photoURL: user.github?.photoURL,
+              },
+            }
+          : user.github
+            ? { github: user.github }
+            : {}),
+      };
+      if (auth.currentUser && auth.currentUser.displayName !== validation.cleanName) {
+        await updateProfile(auth.currentUser, { displayName: validation.cleanName });
+      }
+      await saveUserProfile(profile);
+      onComplete(profile);
+    } catch (err) {
+      setError(err instanceof Error ? err.message.replace("Firebase: ", "") : "Could not save your profile");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const formInputClass = "w-full rounded-xl border border-white/10 bg-white/5 py-3 px-3 text-sm text-white outline-none transition-colors placeholder:text-white/25 focus:border-violet-500/40";
+
+  return (
+    <div className="min-h-screen bg-background relative overflow-hidden px-6 py-10">
+      <div className="absolute inset-0 pointer-events-none" style={{
+        backgroundImage: "linear-gradient(rgba(124,58,237,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(124,58,237,0.04) 1px,transparent 1px)",
+        backgroundSize: "48px 48px"
+      }} />
+      <button onClick={onCancel} className="relative z-10 mb-10 flex items-center gap-2 text-white/55 hover:text-white transition-colors">
+        <ChevronLeft className="w-4 h-4" /> Back
+      </button>
+
+      <div className="relative z-10 mx-auto grid min-h-[calc(100vh-8rem)] max-w-5xl items-center gap-8 lg:grid-cols-[1fr_560px]">
+        <div>
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-300">
+            <Users className="w-3 h-3" /> Complete your profile
+          </div>
+          <h1 className="mb-5 text-4xl font-bold leading-tight text-white lg:text-6xl" style={{ fontFamily: "Outfit" }}>
+            Finish setup, then you’re in.
+          </h1>
+          <p className="max-w-xl text-base leading-relaxed text-white/50">
+            We use this profile for progress tracking, submissions, evaluations, and certificates. Your email stays tied to the authenticated Firebase account.
+          </p>
+        </div>
+
+        <GlassPanel className="p-6" glow>
+          <form onSubmit={handleSave} className="flex flex-col gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                Full Name
+                <input value={fullName} onChange={event => setFullName(event.target.value)} className={formInputClass} placeholder="Your name" autoComplete="name" />
+                {fieldErrors.fullName && <span className="text-[11px] text-red-300">{fieldErrors.fullName}</span>}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45">
+                Age
+                <input inputMode="numeric" value={age} onChange={event => setAge(event.target.value)} className={formInputClass} placeholder="18" />
+                {fieldErrors.age && <span className="text-[11px] text-red-300">{fieldErrors.age}</span>}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45">
+                Gender
+                <select value={gender} onChange={event => setGender(event.target.value as Gender)} className={`${formInputClass} appearance-none`}>
+                  <option value="" className="bg-[#0d0d28]">Select gender</option>
+                  {(["Male", "Female", "Non-binary", "Prefer not to say"] as Gender[]).map(item => (
+                    <option key={item} value={item} className="bg-[#0d0d28]">{item}</option>
+                  ))}
+                </select>
+                {fieldErrors.gender && <span className="text-[11px] text-red-300">{fieldErrors.gender}</span>}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                Mobile Number
+                <input inputMode="tel" value={mobileNumber} onChange={event => setMobileNumber(event.target.value)} className={formInputClass} placeholder="+91 98765 43210" autoComplete="tel" />
+                {fieldErrors.mobileNumber && <span className="text-[11px] text-red-300">{fieldErrors.mobileNumber}</span>}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                Email Address
+                <input value={email} readOnly className={`${formInputClass} opacity-80`} />
+                <span className="text-[11px] text-white/30">This comes from your Firebase account and stays locked to your auth identity.</span>
+                {fieldErrors.email && <span className="text-[11px] text-red-300">{fieldErrors.email}</span>}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                GitHub Username or Account
+                <input value={githubUsername} onChange={event => setGithubUsername(event.target.value)} className={formInputClass} placeholder="octocat" autoComplete="off" />
+                {fieldErrors.githubUsername && <span className="text-[11px] text-red-300">{fieldErrors.githubUsername}</span>}
+              </label>
+            </div>
+
+            {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
+
+            <button disabled={busy} className="mt-1 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.35)] transition-all hover:from-violet-500 hover:to-blue-500 disabled:cursor-not-allowed disabled:opacity-60">
+              {busy ? "Saving profile..." : "Save Profile"}
+            </button>
+          </form>
+        </GlassPanel>
+      </div>
+    </div>
+  );
+}
+
+function firebaseErrorCode(error: unknown) {
+  return typeof error === "object" && error && "code" in error ? String((error as { code?: string }).code) : "";
+}
+
+function githubAuthErrorMessage(error: unknown) {
+  const code = firebaseErrorCode(error);
+  switch (code) {
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "GitHub sign-in was cancelled. Try again when you are ready.";
+    case "auth/popup-blocked":
+      return "Your browser blocked the GitHub popup. Allow popups for WORKISM and try again.";
+    case "auth/account-exists-with-different-credential":
+      return "An account already exists with this email using another sign-in method. Sign in with that method first, then link GitHub.";
+    case "auth/operation-not-allowed":
+      return "GitHub sign-in is not enabled in Firebase yet. Enable the GitHub provider in Firebase Authentication.";
+    case "auth/unauthorized-domain":
+      return "This WORKISM domain is not authorized in Firebase Authentication. Add the current domain in Firebase Auth settings.";
+    case "auth/invalid-credential":
+    case "auth/invalid-oauth-client-id":
+    case "auth/invalid-oauth-provider":
+      return "GitHub sign-in is not configured correctly. Check the GitHub Client ID and secret in Firebase.";
+    case "auth/network-request-failed":
+      return "Network connection failed while signing in with GitHub. Check your connection and try again.";
+    default:
+      return "GitHub sign-in could not be completed. Check the Firebase and GitHub OAuth settings, then try again.";
+  }
 }
 
 function githubProfileFromCredential(firebaseUser: FirebaseUser, credential?: UserCredential): GithubProfile | undefined {
@@ -2113,11 +2711,18 @@ function githubProfileFromCredential(firebaseUser: FirebaseUser, credential?: Us
   };
 }
 
+function workismProfileName(firebaseUser: FirebaseUser, email: string) {
+  const provider = firebaseUser.providerData.find(item => item.providerId === "github.com");
+  const candidate = firebaseUser.displayName || provider?.displayName || provider?.email?.split("@")[0] || email.split("@")[0];
+  return /^[A-Za-z][A-Za-z .'-]{1,78}$/.test(candidate) ? candidate : "Workism learner";
+}
+
 function firebaseUserToWorkismUser(firebaseUser: FirebaseUser, credential?: UserCredential): WorkismUser {
-  const email = firebaseUser.email || "";
+  const provider = firebaseUser.providerData.find(item => item.providerId === "github.com");
+  const email = firebaseUser.email || provider?.email || `${firebaseUser.uid}@users.noreply.workism.local`;
   return {
     id: firebaseUser.uid,
-    name: firebaseUser.displayName || email.split("@")[0] || "Workism learner",
+    name: workismProfileName(firebaseUser, email),
     email,
     github: githubProfileFromCredential(firebaseUser, credential),
   };
@@ -2126,6 +2731,7 @@ function firebaseUserToWorkismUser(firebaseUser: FirebaseUser, credential?: User
 export default function App() {
   const [screen, setScreen] = useState<Screen>("landing");
   const [authReady, setAuthReady] = useState(false);
+  const [pendingProfile, setPendingProfile] = useState<WorkismUser | null>(null);
   const [user, setUser] = useState<WorkismUser | null>(() => {
     const saved = localStorage.getItem("workism_user");
     return saved ? JSON.parse(saved) : null;
@@ -2140,24 +2746,39 @@ export default function App() {
   });
 
   useEffect(() => {
-    return onAuthStateChanged(auth, async firebaseUser => {
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, async firebaseUser => {
       try {
         if (!firebaseUser) {
           setUser(null);
+          setPendingProfile(null);
           localStorage.removeItem("workism_user");
           if (screen !== "landing" && screen !== "auth") setScreen("auth");
           return;
         }
-        const syncedUser = await syncFirebaseUser(firebaseUserToWorkismUser(firebaseUser), await firebaseUser.getIdToken());
-        setUser(syncedUser);
-        if (screen === "auth" || screen === "landing") setScreen("dashboard");
+        const workismUser = firebaseUserToWorkismUser(firebaseUser);
+        const syncedUser = await syncFirebaseUser(workismUser, await firebaseUser.getIdToken());
+        const profile = await getUserProfile(firebaseUser.uid);
+        const mergedUser = profile ? { ...syncedUser, ...profile } : syncedUser;
+        if (!active) return;
+        setUser(mergedUser);
+        if (pendingProfile || !profile) {
+          setPendingProfile(mergedUser);
+          setScreen("profile");
+        } else if (screen === "auth" || screen === "landing") {
+          setScreen("dashboard");
+        }
       } catch (err) {
         console.error("Failed to sync Firebase user", err);
       } finally {
-        setAuthReady(true);
+        if (active) setAuthReady(true);
       }
     });
-  }, [screen]);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [pendingProfile, screen]);
 
   const navigate = (nextScreen: Screen) => {
     if (!user && nextScreen !== "landing" && nextScreen !== "auth") {
@@ -2165,6 +2786,23 @@ export default function App() {
       return;
     }
     setScreen(nextScreen);
+  };
+
+  const handleAuthenticated = (nextUser: WorkismUser, needsProfile: boolean) => {
+    setUser(nextUser);
+    if (needsProfile) {
+      setPendingProfile(nextUser);
+      setScreen("profile");
+    } else {
+      setPendingProfile(null);
+      setScreen("dashboard");
+    }
+  };
+
+  const handleProfileComplete = async (savedUser: WorkismUser) => {
+    setUser(savedUser);
+    setPendingProfile(null);
+    setScreen("dashboard");
   };
 
   const runtime: WorkismRuntime = {
@@ -2179,6 +2817,7 @@ export default function App() {
 
   const handleLogout = async () => {
     await signOut(auth);
+    clearGithubToken();
     localStorage.removeItem("workism_user");
     localStorage.removeItem("workism_last_submission");
     localStorage.removeItem("workism_last_evaluation");
@@ -2186,19 +2825,20 @@ export default function App() {
     setUser(null);
     setEvaluation(null);
     setCertificate(null);
+    setPendingProfile(null);
     setScreen("auth");
   };
 
   const renderDashboardContent = () => {
     switch (screen) {
-      case "dashboard": return <DashboardHome onNavigate={navigate} />;
+      case "dashboard": return <DashboardHome onNavigate={navigate} user={user} />;
       case "skills": return <SkillsPage onNavigate={navigate} />;
-      case "learning": return <LearningPage onNavigate={navigate} />;
+      case "learning": return <LearningPage onNavigate={navigate} user={user} />;
       case "assessment": return <AssessmentPage onNavigate={navigate} />;
       case "submission": return <SubmissionPage runtime={runtime} />;
       case "evaluation": return <EvaluationPage runtime={runtime} />;
       case "certificate": return <CertificatePage runtime={runtime} />;
-      default: return <DashboardHome onNavigate={navigate} />;
+      default: return <DashboardHome onNavigate={navigate} user={user} />;
     }
   };
 
@@ -2220,11 +2860,30 @@ export default function App() {
     );
   }
 
-  if (screen === "auth" || !user) {
+  if ((screen === "auth" || !user) && screen !== "profile") {
     return (
       <>
         <CursorGlow />
-        <AuthPage onNavigate={navigate} />
+        <AuthPage onNavigate={navigate} onAuthenticated={handleAuthenticated} />
+      </>
+    );
+  }
+
+  if (screen === "profile" && (pendingProfile || user)) {
+    const profileUser = pendingProfile || user;
+    if (!profileUser) {
+      return null;
+    }
+    return (
+      <>
+        <CursorGlow />
+        <ProfilePage
+          user={profileUser}
+          onComplete={handleProfileComplete}
+          onCancel={async () => {
+            await handleLogout();
+          }}
+        />
       </>
     );
   }

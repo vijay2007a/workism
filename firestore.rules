@@ -28,7 +28,8 @@ service cloud.firestore {
       return request.resource.data.name is string
         && request.resource.data.name.size() >= 2
         && request.resource.data.name.size() <= 80
-        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.email is string
+        && (!("email" in request.auth.token) || request.resource.data.email == request.auth.token.email)
         && (!("age" in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 13 && request.resource.data.age <= 100))
         && (!("mobileNumber" in request.resource.data) || request.resource.data.mobileNumber is string)
         && (!("gender" in request.resource.data) || request.resource.data.gender in ["Male", "Female", "Non-binary", "Prefer not to say"]);

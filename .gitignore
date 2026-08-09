@@ -5,6 +5,8 @@ dist/
 backend/data/
 backend/__pycache__/
 backend/.venv/
+backend/service-account.json
+backend/*service-account*.json
 *.pyc
 
 .env
