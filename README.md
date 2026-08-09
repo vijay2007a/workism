@@ -169,7 +169,7 @@ Set `CORS_ORIGINS` to your Vercel domain:
 CORS_ORIGINS=https://your-vercel-app.vercel.app
 ```
 
-If Ollama runs on another server, set `OLLAMA_BASE_URL` to the private or protected backend-accessible URL. Never expose Ollama directly to the browser.
+If Ollama runs on another server, set `OLLAMA_BASE_URL` as a backend environment variable in Render or your host of choice. Never expose Ollama directly to the browser.
 
 ## Required Environment Variables
 
@@ -189,7 +189,7 @@ FIREBASE_CREDENTIALS_JSON=
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 GITHUB_REDIRECT_URI=
-OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_BASE_URL=
 OLLAMA_MODEL=qwen2.5-coder:14b
 ```
 

@@ -50,4 +50,4 @@ Learner question:
     try:
         return {"answer": ai_provider.generate(prompt)}
     except AIProviderUnavailable as exc:
-        raise HTTPException(status_code=503, detail="AI tutor is not configured or reachable. Configure the backend LLM provider.") from exc
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

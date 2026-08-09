@@ -16,4 +16,10 @@ Required production services:
 - GitHub OAuth app credentials for repository connection
 - Ollama reachable from the backend, not from the browser
 
+For Render deployments, set `OLLAMA_BASE_URL` and `OLLAMA_MODEL` as backend environment variables.
+Do not send Ollama secrets or credentials to the frontend.
+If Ollama stays on your personal PC, Render still needs a URL it can reach, such as a tunnel or exposed host.
+If Ollama stays on your personal PC, Render cannot call `http://localhost:11434` directly.
+You will need a public tunnel or a host that Render can reach later.
+
 See the root README for full deployment instructions.
