@@ -22,6 +22,16 @@ class FirebaseUserRequest(BaseModel):
     age: int | None = Field(default=None, ge=13, le=100)
     mobileNumber: str | None = Field(default=None, min_length=7, max_length=20)
     gender: Literal["Male", "Female", "Non-binary", "Prefer not to say"] | None = None
+    institution: str | None = Field(default=None, min_length=2, max_length=120)
+    github: dict[str, Any] | None = None
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    age: int | None = Field(default=None, ge=13, le=100)
+    mobileNumber: str | None = Field(default=None, min_length=7, max_length=20)
+    gender: Literal["Male", "Female", "Non-binary", "Prefer not to say"] | None = None
+    institution: str = Field(min_length=2, max_length=120)
     github: dict[str, Any] | None = None
 
 

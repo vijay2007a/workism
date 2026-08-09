@@ -21,6 +21,7 @@ export type WorkismUser = {
   age?: number;
   mobileNumber?: string;
   gender?: Gender;
+  institution?: string;
   github?: GithubProfile;
 };
 
@@ -151,36 +152,47 @@ export function logoutDemoUser() {
 }
 
 export async function syncFirebaseUser(user: WorkismUser, idToken: string): Promise<WorkismUser> {
-  if (!firebaseConfigured || !db) {
-    throw new Error(firebaseConfigurationMessage());
-  }
-  if (!API_BASE_URL) {
-    const profileRef = doc(db, "users", user.id);
-    const existing = await getDoc(profileRef);
-    const profile = {
-      name: user.name,
-      email: user.email.toLowerCase(),
-      ...(user.age ? { age: user.age } : {}),
-      ...(user.mobileNumber ? { mobileNumber: user.mobileNumber } : {}),
-      ...(user.gender ? { gender: user.gender } : {}),
-      ...(user.github ? { github: user.github } : {}),
-      updatedAt: serverTimestamp(),
-      ...(!existing.exists() ? { createdAt: serverTimestamp() } : {}),
-    };
-    await setDoc(profileRef, profile, { merge: true });
-    const synced = { ...user, ...(existing.exists() ? existing.data() : profile), id: user.id } as WorkismUser;
+  if (API_BASE_URL) {
+    const synced = await api<WorkismUser>("/auth/firebase-sync", {
+      method: "POST",
+      body: { ...user, id_token: idToken },
+    });
     localStorage.setItem("workism_user", JSON.stringify(synced));
     return synced;
   }
-  const synced = await api<WorkismUser>("/auth/firebase-sync", {
-    method: "POST",
-    body: { ...user, id_token: idToken },
-  });
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
+  const profileRef = doc(db, "users", user.id);
+  const existing = await getDoc(profileRef);
+  const profile = {
+    name: user.name,
+    email: user.email.toLowerCase(),
+    ...(user.age ? { age: user.age } : {}),
+    ...(user.mobileNumber ? { mobileNumber: user.mobileNumber } : {}),
+    ...(user.gender ? { gender: user.gender } : {}),
+    ...(user.institution ? { institution: user.institution } : {}),
+    ...(user.github ? { github: user.github } : {}),
+    updatedAt: serverTimestamp(),
+    ...(!existing.exists() ? { createdAt: serverTimestamp() } : {}),
+  };
+  await setDoc(profileRef, profile, { merge: true });
+  const synced = { ...user, ...(existing.exists() ? existing.data() : profile), id: user.id } as WorkismUser;
   localStorage.setItem("workism_user", JSON.stringify(synced));
   return synced;
 }
 
 export async function getUserProfile(uid: string): Promise<WorkismUser | null> {
+  if (API_BASE_URL) {
+    try {
+      return await api<WorkismUser>("/profile");
+    } catch (error) {
+      if (error instanceof Error && /Profile not found|Request failed with 404/i.test(error.message)) {
+        return null;
+      }
+      throw error;
+    }
+  }
   if (!firebaseConfigured || !db) {
     throw new Error(firebaseConfigurationMessage());
   }
@@ -190,6 +202,21 @@ export async function getUserProfile(uid: string): Promise<WorkismUser | null> {
 }
 
 export async function saveUserProfile(user: WorkismUser): Promise<WorkismUser> {
+  if (API_BASE_URL) {
+    const saved = await api<WorkismUser>("/profile", {
+      method: "PUT",
+      body: {
+        name: user.name.trim(),
+        age: user.age,
+        mobileNumber: user.mobileNumber,
+        gender: user.gender,
+        institution: user.institution?.trim() || "",
+        github: user.github,
+      },
+    });
+    localStorage.setItem("workism_user", JSON.stringify(saved));
+    return saved;
+  }
   if (!firebaseConfigured || !db) {
     throw new Error(firebaseConfigurationMessage());
   }
@@ -200,6 +227,7 @@ export async function saveUserProfile(user: WorkismUser): Promise<WorkismUser> {
     age: user.age,
     mobileNumber: user.mobileNumber,
     gender: user.gender,
+    institution: user.institution?.trim(),
     ...(user.github ? { github: user.github } : {}),
     updatedAt: serverTimestamp(),
   };

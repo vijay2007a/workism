@@ -2286,6 +2286,7 @@ function AuthPage({
   const [age, setAge] = useState("");
   const [mobileNumber, setMobileNumber] = useState("");
   const [gender, setGender] = useState<Gender | "">("");
+  const [institution, setInstitution] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -2298,6 +2299,7 @@ function AuthPage({
     const cleanName = fullName.trim();
     const cleanAge = Number(age);
     const cleanPhone = mobileNumber.replace(/[\s-]/g, "");
+    const cleanInstitution = institution.trim();
     const cleanEmail = email.trim().toLowerCase();
 
     if (mode === "signup") {
@@ -2305,6 +2307,7 @@ function AuthPage({
       if (!Number.isInteger(cleanAge) || cleanAge < 13 || cleanAge > 100) errors.age = "Age must be a number from 13 to 100.";
       if (!/^(\+?[1-9]\d{6,14}|[6-9]\d{9})$/.test(cleanPhone)) errors.mobileNumber = "Use a valid Indian or international mobile number.";
       if (!gender) errors.gender = "Choose an option.";
+      if (!cleanInstitution || cleanInstitution.length < 2 || cleanInstitution.length > 120) errors.institution = "Enter your institution or college name.";
       if (password !== confirmPassword) errors.confirmPassword = "Passwords must match.";
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) errors.email = "Enter a valid email address.";
@@ -2312,7 +2315,7 @@ function AuthPage({
     if (mode === "signin" && !password) errors.password = "Enter your password.";
 
     setFieldErrors(errors);
-    return { valid: Object.keys(errors).length === 0, cleanName, cleanAge, cleanPhone, cleanEmail };
+    return { valid: Object.keys(errors).length === 0, cleanName, cleanAge, cleanPhone, cleanEmail, cleanInstitution };
   };
 
   const clearSecrets = () => {
@@ -2347,11 +2350,12 @@ function AuthPage({
           age: validation.cleanAge,
           mobileNumber: validation.cleanPhone,
           gender: gender as Gender,
+          institution: validation.cleanInstitution,
         } : {}),
       } satisfies WorkismUser;
-      await syncFirebaseUser(workismUser, await firebaseUser.getIdToken());
+      const syncedUser = await syncFirebaseUser(workismUser, await firebaseUser.getIdToken());
       clearSecrets();
-      onAuthenticated(workismUser, mode === "signup");
+      onAuthenticated(syncedUser, !hasCompleteProfile(syncedUser));
     } catch (err) {
       setError(err instanceof Error ? err.message.replace("Firebase: ", "") : "Authentication failed");
     } finally {
@@ -2374,9 +2378,9 @@ function AuthPage({
         saveGithubToken(token);
       }
       const workismUser = firebaseUserToWorkismUser(credential.user, credential);
-      await syncFirebaseUser(workismUser, await credential.user.getIdToken());
+      const syncedUser = await syncFirebaseUser(workismUser, await credential.user.getIdToken());
       clearSecrets();
-      onAuthenticated(workismUser, false);
+      onAuthenticated(syncedUser, !hasCompleteProfile(syncedUser));
     } catch (err) {
       console.error("GitHub authentication failed", {
         code: firebaseErrorCode(err),
@@ -2398,9 +2402,9 @@ function AuthPage({
     try {
       const credential = await signInWithPopup(auth, googleProvider);
       const workismUser = firebaseUserToWorkismUser(credential.user, credential);
-      await syncFirebaseUser(workismUser, await credential.user.getIdToken());
+      const syncedUser = await syncFirebaseUser(workismUser, await credential.user.getIdToken());
       clearSecrets();
-      onAuthenticated(workismUser, false);
+      onAuthenticated(syncedUser, !hasCompleteProfile(syncedUser));
     } catch (err) {
       setError(err instanceof Error ? err.message.replace("Firebase: ", "") : "Google sign-in failed");
     } finally {
@@ -2483,13 +2487,18 @@ function AuthPage({
                   </select>
                   {errorText("gender")}
                 </label>
-                <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
-                  Mobile Number
-                  <input inputMode="tel" value={mobileNumber} onChange={event => setMobileNumber(event.target.value)} className={formInputClass} placeholder="+91 98765 43210" autoComplete="tel" />
-                  {errorText("mobileNumber")}
-                </label>
-              </div>
-            )}
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                Mobile Number
+                <input inputMode="tel" value={mobileNumber} onChange={event => setMobileNumber(event.target.value)} className={formInputClass} placeholder="+91 98765 43210" autoComplete="tel" />
+                {errorText("mobileNumber")}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                Institution / College Name
+                <input value={institution} onChange={event => setInstitution(event.target.value)} className={formInputClass} placeholder="Your college or institution" autoComplete="organization" />
+                {errorText("institution")}
+              </label>
+            </div>
+          )}
             <label className="flex flex-col gap-2 text-xs text-white/45">
               Email Address
               <div className="relative">
@@ -2564,6 +2573,7 @@ function ProfilePage({
   const [age, setAge] = useState(user.age ? String(user.age) : "");
   const [mobileNumber, setMobileNumber] = useState(user.mobileNumber || "");
   const [gender, setGender] = useState<Gender | "">(user.gender || "");
+  const [institution, setInstitution] = useState(user.institution || "");
   const [email] = useState(user.email || "");
   const [githubUsername, setGithubUsername] = useState(user.github?.username || "");
   const [busy, setBusy] = useState(false);
@@ -2575,6 +2585,7 @@ function ProfilePage({
     setAge(user.age ? String(user.age) : "");
     setMobileNumber(user.mobileNumber || "");
     setGender(user.gender || "");
+    setInstitution(user.institution || "");
     setGithubUsername(user.github?.username || "");
   }, [user]);
 
@@ -2583,6 +2594,7 @@ function ProfilePage({
     const cleanName = fullName.trim();
     const cleanAge = Number(age);
     const cleanPhone = mobileNumber.replace(/[\s-]/g, "");
+    const cleanInstitution = institution.trim();
     const cleanGithub = githubUsername.trim();
 
     if (!/^[A-Za-z][A-Za-z .'-]{1,78}$/.test(cleanName)) errors.fullName = "Enter a valid full name.";
@@ -2590,6 +2602,7 @@ function ProfilePage({
     if (!/^(\+?[1-9]\d{6,14}|[6-9]\d{9})$/.test(cleanPhone)) errors.mobileNumber = "Enter a valid mobile number.";
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = "Email is invalid.";
     if (!gender) errors.gender = "Choose a gender option.";
+    if (!cleanInstitution || cleanInstitution.length < 2 || cleanInstitution.length > 120) errors.institution = "Enter your institution or college name.";
     if (cleanGithub && !/^[A-Za-z0-9-]{1,39}$/.test(cleanGithub)) errors.githubUsername = "Use a valid GitHub username or leave it blank.";
 
     setFieldErrors(errors);
@@ -2598,6 +2611,7 @@ function ProfilePage({
       cleanName,
       cleanAge,
       cleanPhone,
+      cleanInstitution,
       cleanGithub,
     };
   };
@@ -2616,6 +2630,7 @@ function ProfilePage({
         age: validation.cleanAge,
         mobileNumber: validation.cleanPhone,
         gender: gender as Gender,
+        institution: validation.cleanInstitution,
         ...(validation.cleanGithub
           ? {
               github: {
@@ -2690,6 +2705,11 @@ function ProfilePage({
                   ))}
                 </select>
                 {fieldErrors.gender && <span className="text-[11px] text-red-300">{fieldErrors.gender}</span>}
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
+                Institution / College Name
+                <input value={institution} onChange={event => setInstitution(event.target.value)} className={formInputClass} placeholder="Your institution" autoComplete="organization" />
+                {fieldErrors.institution && <span className="text-[11px] text-red-300">{fieldErrors.institution}</span>}
               </label>
               <label className="flex flex-col gap-2 text-xs text-white/45 sm:col-span-2">
                 Mobile Number
@@ -2770,6 +2790,18 @@ function workismProfileName(firebaseUser: FirebaseUser, email: string) {
   return /^[A-Za-z][A-Za-z .'-]{1,78}$/.test(candidate) ? candidate : "Workism learner";
 }
 
+function hasCompleteProfile(user: WorkismUser | null | undefined) {
+  if (!user) return false;
+  return Boolean(
+    user.name?.trim() &&
+      user.email?.trim() &&
+      Number.isInteger(user.age) &&
+      user.mobileNumber?.trim() &&
+      user.gender &&
+      user.institution?.trim(),
+  );
+}
+
 function firebaseUserToWorkismUser(firebaseUser: FirebaseUser, credential?: UserCredential): WorkismUser {
   const provider = firebaseUser.providerData.find(item => item.providerId === "github.com");
   const email = firebaseUser.email || provider?.email || `${firebaseUser.uid}@users.noreply.workism.local`;
@@ -2816,7 +2848,7 @@ export default function App() {
         const mergedUser = profile ? { ...syncedUser, ...profile } : syncedUser;
         if (!active) return;
         setUser(mergedUser);
-        if (pendingProfile || !profile) {
+        if (pendingProfile || !hasCompleteProfile(mergedUser)) {
           setPendingProfile(mergedUser);
           setScreen("profile");
         } else if (screen === "auth" || screen === "landing") {

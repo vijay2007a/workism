@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from routes import assessments, auth, certificates, evaluations, github, learning, skills, submissions
+from routes import assessments, auth, certificates, evaluations, github, learning, profile, skills, submissions
 from services.config import settings
 
 load_dotenv()
@@ -17,6 +17,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
+app.include_router(profile.router, prefix="/api/profile", tags=["profile"])
 app.include_router(skills.router, prefix="/api/skills", tags=["skills"])
 app.include_router(learning.router, prefix="/api/learning", tags=["learning"])
 app.include_router(assessments.router, prefix="/api/assessments", tags=["assessments"])

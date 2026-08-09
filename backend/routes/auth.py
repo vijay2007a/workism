@@ -28,5 +28,6 @@ def firebase_sync(payload: FirebaseUserRequest) -> dict[str, Any]:
         age=payload.age,
         mobile_number=payload.mobileNumber,
         gender=payload.gender,
+        institution=payload.institution,
         github=payload.github,
     )
