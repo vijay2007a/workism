@@ -6,8 +6,16 @@ from functools import cached_property
 class Settings:
     @property
     def cors_origins(self) -> list[str]:
-        raw = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+        raw = os.getenv(
+            "CORS_ORIGINS",
+            "https://workism-ai.vercel.app,http://localhost:5173,http://127.0.0.1:5173",
+        )
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        raw = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app")
+        return raw.strip() or None
 
     @property
     def firebase_project_id(self) -> str | None:
@@ -37,6 +45,14 @@ class Settings:
     @property
     def ollama_base_url(self) -> str:
         return os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+
+    @property
+    def ollama_api_key(self) -> str | None:
+        raw = os.getenv("OLLAMA_API_KEY")
+        if not raw:
+            return None
+        value = raw.strip()
+        return value or None
 
     @property
     def ollama_model(self) -> str:
