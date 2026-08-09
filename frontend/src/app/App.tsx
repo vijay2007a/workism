@@ -305,6 +305,38 @@ function SoftPanel({ children, className = "" }: { children: React.ReactNode; cl
   );
 }
 
+export class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message };
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-background px-6 py-10">
+          <div className="mx-auto max-w-3xl rounded-2xl border border-red-500/20 bg-red-500/10 p-6 text-sm text-red-100">
+            <div className="mb-2 text-lg font-semibold text-white">Workism failed to render</div>
+            <div className="mb-4 whitespace-pre-wrap">{this.state.message}</div>
+            <div className="text-white/70">
+              Refresh after fixing the underlying config or runtime error.
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 // ─── AI Hero Visual ───────────────────────────────────────────────────────────
 
 function AIHeroVisual() {
@@ -2281,6 +2313,10 @@ function AuthPage({
 
   const submitEmail = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!auth) {
+      setError(firebaseConfigurationMessage());
+      return;
+    }
     const validation = validate();
     if (!validation.valid) return;
     setBusy(true);
@@ -2316,6 +2352,10 @@ function AuthPage({
   };
 
   const submitGithub = async () => {
+    if (!auth || !githubProvider) {
+      setError(firebaseConfigurationMessage());
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -2340,6 +2380,10 @@ function AuthPage({
   };
 
   const submitGoogle = async () => {
+    if (!auth || !googleProvider) {
+      setError(firebaseConfigurationMessage());
+      return;
+    }
     setBusy(true);
     setError("");
     try {

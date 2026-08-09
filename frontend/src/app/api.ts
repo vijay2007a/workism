@@ -107,7 +107,7 @@ async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
     throw new Error(firebaseConfigurationMessage());
   }
   const headers = new Headers(options.headers);
-  const firebaseToken = await auth.currentUser?.getIdToken();
+  const firebaseToken = auth.currentUser ? await auth.currentUser.getIdToken() : undefined;
   if (firebaseToken) headers.set("Authorization", `Bearer ${firebaseToken}`);
   const githubToken = localStorage.getItem(GITHUB_TOKEN_KEY);
   if (githubToken) headers.set("X-GitHub-Token", githubToken);
