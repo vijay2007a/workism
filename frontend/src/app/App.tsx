@@ -58,7 +58,7 @@ import {
   type GithubProfile,
   type WorkismUser,
 } from "./api";
-import { auth, githubProvider, googleProvider } from "./firebase";
+import { auth, firebaseConfigured, firebaseConfigurationMessage, githubProvider, googleProvider } from "./firebase";
 
 type Screen =
   | "landing"
@@ -2730,7 +2730,7 @@ function firebaseUserToWorkismUser(firebaseUser: FirebaseUser, credential?: User
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("landing");
-  const [authReady, setAuthReady] = useState(false);
+  const [authReady, setAuthReady] = useState(firebaseConfigured);
   const [pendingProfile, setPendingProfile] = useState<WorkismUser | null>(null);
   const [user, setUser] = useState<WorkismUser | null>(() => {
     const saved = localStorage.getItem("workism_user");
@@ -2746,6 +2746,10 @@ export default function App() {
   });
 
   useEffect(() => {
+    if (!firebaseConfigured || !auth) {
+      setAuthReady(true);
+      return;
+    }
     let active = true;
     const unsubscribe = onAuthStateChanged(auth, async firebaseUser => {
       try {
@@ -2847,6 +2851,23 @@ export default function App() {
       <>
         <CursorGlow />
         <div className="min-h-screen bg-background flex items-center justify-center text-sm text-white/50">Loading Workism...</div>
+      </>
+    );
+  }
+
+  if (!firebaseConfigured) {
+    return (
+      <>
+        <CursorGlow />
+        <div className="min-h-screen bg-background px-6 py-10">
+          <div className="mx-auto max-w-3xl rounded-2xl border border-red-500/20 bg-red-500/10 p-6 text-sm text-red-100">
+            <div className="mb-2 text-lg font-semibold text-white">Firebase is not configured</div>
+            <div className="mb-4">{firebaseConfigurationMessage()}</div>
+            <div className="text-white/70">
+              Add the Firebase Vercel environment variables, then redeploy. The app cannot initialize auth or Firestore without them.
+            </div>
+          </div>
+        </div>
       </>
     );
   }

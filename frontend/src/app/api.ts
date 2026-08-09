@@ -1,5 +1,5 @@
 import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
-import { auth, db } from "./firebase";
+import { auth, db, firebaseConfigured, firebaseConfigurationMessage } from "./firebase";
 
 const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
 const API_BASE_URL = (configuredApiUrl || "").replace(/\/$/, "");
@@ -103,6 +103,9 @@ async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
   if (!API_BASE_URL) {
     throw new Error(apiConfigurationMessage());
   }
+  if (!firebaseConfigured || !auth) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   const headers = new Headers(options.headers);
   const firebaseToken = await auth.currentUser?.getIdToken();
   if (firebaseToken) headers.set("Authorization", `Bearer ${firebaseToken}`);
@@ -139,6 +142,9 @@ export function logoutDemoUser() {
 }
 
 export async function syncFirebaseUser(user: WorkismUser, idToken: string): Promise<WorkismUser> {
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   if (!API_BASE_URL) {
     const profileRef = doc(db, "users", user.id);
     const existing = await getDoc(profileRef);
@@ -166,12 +172,18 @@ export async function syncFirebaseUser(user: WorkismUser, idToken: string): Prom
 }
 
 export async function getUserProfile(uid: string): Promise<WorkismUser | null> {
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   const profile = await getDoc(doc(db, "users", uid));
   if (!profile.exists()) return null;
   return { id: uid, ...profile.data() } as WorkismUser;
 }
 
 export async function saveUserProfile(user: WorkismUser): Promise<WorkismUser> {
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   const profileRef = doc(db, "users", user.id);
   const profile = {
     name: user.name.trim(),
@@ -266,11 +278,17 @@ export function certificateDownloadUrl(certificateId: string) {
 }
 
 export async function getLearningProgress(userId: string) {
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   const result = await getDocs(query(collection(db, "learning_progress"), where("user_id", "==", userId)));
   return result.docs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() })) as LearningProgressRecord[];
 }
 
 export async function saveLearningProgress(record: LearningProgressRecord) {
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   const docId = `${record.user_id}_${record.skill_id}_${record.module_id}`;
   const payload = {
     ...record,
@@ -282,6 +300,9 @@ export async function saveLearningProgress(record: LearningProgressRecord) {
 }
 
 export async function getDashboardStats(userId: string): Promise<DashboardStats> {
+  if (!firebaseConfigured || !db) {
+    throw new Error(firebaseConfigurationMessage());
+  }
   const [progress, submissions, evaluations, certificates] = await Promise.all([
     getDocs(query(collection(db, "learning_progress"), where("user_id", "==", userId))),
     getDocs(query(collection(db, "submissions"), where("user_id", "==", userId))),

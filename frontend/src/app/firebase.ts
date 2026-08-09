@@ -20,15 +20,20 @@ const missingFirebaseVars = [
   ["appId", "VITE_FIREBASE_APP_ID"],
 ] as const;
 
-for (const [key, envName] of missingFirebaseVars) {
-  if (!firebaseConfig[key]) {
-    throw new Error(`Missing Firebase environment variable: ${envName}`);
-  }
+export const firebaseConfigured = missingFirebaseVars.every(([key]) => Boolean(firebaseConfig[key]));
+
+export function firebaseConfigurationMessage() {
+  const missing = missingFirebaseVars.filter(([key]) => !firebaseConfig[key]).map(([, envName]) => envName);
+  return missing.length
+    ? `Missing Firebase environment variable(s): ${missing.join(", ")}`
+    : "Firebase is not configured.";
 }
 
-export const firebaseApp = initializeApp(firebaseConfig);
-export const auth = getAuth(firebaseApp);
-void setPersistence(auth, browserLocalPersistence);
-export const db = getFirestore(firebaseApp);
-export const googleProvider = new GoogleAuthProvider();
-export const githubProvider = new GithubAuthProvider();
+export const firebaseApp = firebaseConfigured ? initializeApp(firebaseConfig) : null;
+export const auth = firebaseApp ? getAuth(firebaseApp) : null;
+if (auth) {
+  void setPersistence(auth, browserLocalPersistence);
+}
+export const db = firebaseApp ? getFirestore(firebaseApp) : null;
+export const googleProvider = firebaseApp ? new GoogleAuthProvider() : null;
+export const githubProvider = firebaseApp ? new GithubAuthProvider() : null;
