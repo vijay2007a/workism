@@ -1,0 +1,84 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function owns(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function profileKeysAreSafe() {
+      return request.resource.data.keys().hasOnly([
+        "name",
+        "age",
+        "mobileNumber",
+        "gender",
+        "email",
+        "github",
+        "auth_provider",
+        "createdAt",
+        "updatedAt"
+      ]);
+    }
+
+    function profileDataIsValid() {
+      return request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.email == request.auth.token.email
+        && (!("age" in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 13 && request.resource.data.age <= 100))
+        && (!("mobileNumber" in request.resource.data) || request.resource.data.mobileNumber is string)
+        && (!("gender" in request.resource.data) || request.resource.data.gender in ["Male", "Female", "Non-binary", "Prefer not to say"]);
+    }
+
+    match /users/{userId} {
+      allow read: if owns(userId);
+      allow create, update: if owns(userId) && profileKeysAreSafe() && profileDataIsValid();
+      allow delete: if false;
+    }
+
+    match /learning_progress/{progressId} {
+      allow read: if signedIn() && resource.data.user_id == request.auth.uid;
+      allow create, update: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /submissions/{submissionId} {
+      allow read: if signedIn() && resource.data.user_id == request.auth.uid;
+      allow create, update: if signedIn() && request.resource.data.user_id == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /evaluations/{evaluationId} {
+      allow read: if signedIn() && resource.data.user_id == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /certificates/{certificateId} {
+      allow read: if signedIn() && resource.data.user_id == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /skills/{skillId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /learning_modules/{moduleId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /assessments/{assessmentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
