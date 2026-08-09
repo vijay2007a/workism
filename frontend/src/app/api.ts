@@ -5,6 +5,15 @@ const configuredApiUrl = import.meta.env.VITE_API_URL as string | undefined;
 const API_BASE_URL = (configuredApiUrl || "").replace(/\/$/, "");
 const GITHUB_TOKEN_KEY = "workism_github_token";
 
+function safeJsonParse<T>(value: string | null): T | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
 export type WorkismUser = {
   id: string;
   name: string;
@@ -211,8 +220,7 @@ export function clearGithubToken() {
 }
 
 export function getStoredGithubProfile(): GithubConnection | null {
-  const saved = localStorage.getItem("workism_github_profile");
-  return saved ? JSON.parse(saved) as GithubConnection : null;
+  return safeJsonParse<GithubConnection>(localStorage.getItem("workism_github_profile"));
 }
 
 export async function getGithubProfile() {

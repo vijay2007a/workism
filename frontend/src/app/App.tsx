@@ -337,6 +337,15 @@ export class AppErrorBoundary extends React.Component<
   }
 }
 
+function safeJsonParse<T>(value: string | null): T | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
 // ─── AI Hero Visual ───────────────────────────────────────────────────────────
 
 function AIHeroVisual() {
@@ -2777,16 +2786,13 @@ export default function App() {
   const [authReady, setAuthReady] = useState(firebaseConfigured);
   const [pendingProfile, setPendingProfile] = useState<WorkismUser | null>(null);
   const [user, setUser] = useState<WorkismUser | null>(() => {
-    const saved = localStorage.getItem("workism_user");
-    return saved ? JSON.parse(saved) : null;
+    return safeJsonParse<WorkismUser>(localStorage.getItem("workism_user"));
   });
   const [evaluation, setEvaluation] = useState<WorkismEvaluation | null>(() => {
-    const saved = localStorage.getItem("workism_last_evaluation");
-    return saved ? JSON.parse(saved) : null;
+    return safeJsonParse<WorkismEvaluation>(localStorage.getItem("workism_last_evaluation"));
   });
   const [certificate, setCertificate] = useState<WorkismCertificate | null>(() => {
-    const saved = localStorage.getItem("workism_last_certificate");
-    return saved ? JSON.parse(saved) : null;
+    return safeJsonParse<WorkismCertificate>(localStorage.getItem("workism_last_certificate"));
   });
 
   useEffect(() => {
