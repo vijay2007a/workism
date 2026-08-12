@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any
 
 from fastapi import HTTPException
 
 from ai.ollama_client import AIProviderUnavailable, ai_provider
 from models.schemas import AIAnalysis, ObjectiveChecks, StructuredEvaluation
+from services.config import settings
 from services.github_service import parse_github_url, repository_context, repository_metadata, repository_tree
 
 PASS_SCORE = 70
+
+
+def _clamp(value: int, minimum: int = 0, maximum: int = 100) -> int:
+    return max(minimum, min(maximum, value))
 
 
 def objective_analysis(submission: dict[str, Any]) -> ObjectiveChecks:
@@ -74,17 +81,82 @@ Code excerpt:
         return fallback
 
 
+def originality_analysis(submission: dict[str, Any]) -> dict[str, Any]:
+    code = str(submission.get("code") or "")
+    files = submission.get("repository_files") or []
+    repository = submission.get("repository") or {}
+    lowered = code.lower()
+    lines = [line.strip() for line in code.splitlines() if line.strip()]
+    total_lines = len(lines)
+    non_comment_lines = [line for line in lines if not line.lstrip().startswith("#")]
+    comment_lines = total_lines - len(non_comment_lines)
+
+    suspicious_hits = 0
+    reasons: list[str] = []
+
+    if total_lines and total_lines < 12:
+        suspicious_hits += 10
+        reasons.append("Very small codebase for the claimed project scope")
+    if lowered.count("todo") or lowered.count("fixme"):
+        suspicious_hits += 15
+        reasons.append("Contains TODO/FIXME placeholders")
+    if "pass" in lowered:
+        suspicious_hits += 10
+        reasons.append("Contains placeholder pass statements")
+    if any(phrase in lowered for phrase in ["as an ai", "i cannot", "here is a", "feel free to ask"]):
+        suspicious_hits += 25
+        reasons.append("Contains AI-like explanatory phrases inside code")
+    if len(code) > 0 and comment_lines > total_lines * 0.45:
+        suspicious_hits += 10
+        reasons.append("Comment density is unusually high")
+
+    source_files = [str(item.get("path") or "") for item in files if str(item.get("path") or "").lower().endswith((".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".cpp", ".c", ".cs", ".go", ".rs"))]
+    readmes = [path for path in source_files if path.lower().endswith("readme.md")]
+    tests = [path for path in source_files if "test" in path.lower() or "spec" in path.lower()]
+
+    if len(source_files) <= 1:
+        suspicious_hits += 12
+        reasons.append("Repository has very few source files")
+    if not tests:
+        suspicious_hits += 8
+        reasons.append("No test files found")
+    if not readmes:
+        suspicious_hits += 8
+        reasons.append("No README file found")
+    if not repository.get("latest_commit"):
+        suspicious_hits += 5
+        reasons.append("Missing commit metadata")
+
+    if len(set(line for line in non_comment_lines if len(line) > 2)) < max(3, math.ceil(total_lines * 0.35)):
+        suspicious_hits += 10
+        reasons.append("Code shows limited variety across implementation lines")
+
+    signal = _clamp(suspicious_hits)
+    threshold = settings.originality_max_ai_signal
+    return {
+        "signal": signal,
+        "threshold": threshold,
+        "passed": signal <= threshold,
+        "needs_review": signal > threshold,
+        "reasons": reasons,
+    }
+
+
 def build_structured_evaluation(submission: dict[str, Any]) -> StructuredEvaluation:
     objective = objective_analysis(submission)
     ai = ai_analysis(submission, objective)
     final_score = objective.score
+    originality = originality_analysis(submission)
     return StructuredEvaluation(
         submission_id=submission["id"],
         objective=objective,
         ai=ai,
         final_score=final_score,
         passed=final_score >= PASS_SCORE,
-        metadata={"scoring": "final_score is derived only from objective checks"},
+        metadata={
+            "scoring": "final_score is derived only from objective checks",
+            "originality": originality,
+        },
     )
 
 
@@ -97,6 +169,7 @@ def enrich_submission_repository(submission: dict[str, Any], token: str | None =
     submission["repository"] = metadata
     submission["repository_files"] = files
     submission["code"] = repository_context(owner, repo, metadata["selected_branch"], files, token)
+    submission["originality"] = originality_analysis(submission)
     return submission
 
 

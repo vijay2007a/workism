@@ -43,6 +43,7 @@ def create_submission(
     )
     evaluation["strengths"] = [name for name, passed in evaluation["objective"].items() if isinstance(passed, bool) and passed]
     evaluation["improvements"] = evaluation["ai"]["improvement_suggestions"]
+    evaluation["originality"] = enriched.get("originality") or evaluation.get("metadata", {}).get("originality")
     evaluation["created_at"] = now_iso()
     evaluation["user_id"] = firebase_user["uid"]
     evaluation_doc = collection("evaluations").document()

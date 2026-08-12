@@ -28,6 +28,7 @@ def create_evaluation(payload: EvaluationRequest, firebase_user: dict[str, Any] 
     )
     evaluation["strengths"] = [name for name, passed in evaluation["objective"].items() if isinstance(passed, bool) and passed]
     evaluation["improvements"] = evaluation["ai"]["improvement_suggestions"]
+    evaluation["originality"] = evaluation.get("metadata", {}).get("originality") or submission.get("originality")
     evaluation["created_at"] = now_iso()
     evaluation["user_id"] = firebase_user["uid"]
     doc = collection("evaluations").document()

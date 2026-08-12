@@ -35,24 +35,43 @@ import {
 import {
   certificateDownloadUrl,
   clearGithubToken,
+  createCommunityComment,
+  createCommunityPost,
   askAiTutor,
   evaluateSubmission,
   generateCertificate,
   getDashboardStats,
+  getCertificateEligibility,
+  getCodingAttempts,
+  getCodingProblems,
+  getCommunityComments,
+  getCommunityPosts,
+  getLeaderboard,
+  getLearningModules,
   getStoredGithubProfile,
   getLearningProgress,
   getUserProfile,
   isApiConfigured,
   listGithubRepositories,
   listRepositoryBranches,
+  runCodingWorkout,
   saveGithubToken,
   saveLearningProgress,
   saveUserProfile,
+  submitCodingWorkout,
   submitPythonProject,
   syncFirebaseUser,
   validateGithubRepository,
   type DashboardStats,
+  type CodingAttempt,
+  type CodingProblem,
+  type CodingRunResult,
+  type CommunityComment,
+  type CommunityPost,
+  type DashboardActivity,
+  type LearningModule,
   type Gender,
+  type LeaderboardEntry,
   type WorkismCertificate,
   type WorkismEvaluation,
   type GithubProfile,
@@ -70,7 +89,10 @@ type Screen =
   | "assessment"
   | "submission"
   | "evaluation"
-  | "certificate";
+  | "certificate"
+  | "leaderboard"
+  | "community"
+  | "settings";
 
 const LANDING_NAV_ITEMS = ["Features", "How It Works", "Skills", "About"];
 
@@ -127,7 +149,7 @@ const HOW_IT_WORKS = [
   { step: "04", title: "Earn Your Certificate", desc: "Score above the threshold to earn a verified WORKISM certificate with a unique ID employers can verify." },
 ];
 
-const DASHBOARD_SCREENS: Screen[] = ["dashboard", "skills", "learning", "assessment", "submission", "evaluation", "certificate"];
+const DASHBOARD_SCREENS: Screen[] = ["dashboard", "skills", "learning", "assessment", "submission", "evaluation", "certificate", "leaderboard", "community", "settings"];
 
 type WorkismRuntime = {
   user: WorkismUser | null;
@@ -138,6 +160,11 @@ type WorkismRuntime = {
   setEvaluation: (evaluation: WorkismEvaluation | null) => void;
   setCertificate: (certificate: WorkismCertificate | null) => void;
   onNavigate: (screen: Screen) => void;
+};
+
+type LearningModuleState = LearningModule & {
+  completed: boolean;
+  active?: boolean;
 };
 
 function parseStoredList(value: string[] | string | undefined, fallback: string[]) {
@@ -1204,8 +1231,24 @@ function LearningPage({
   onNavigate: (s: Screen) => void;
   user: WorkismUser | null;
 }) {
-  const [modules, setModules] = useState(MODULES_DATA.map(module => ({ ...module })));
+  const fallbackModules: LearningModuleState[] = MODULES_DATA.map(module => ({
+    id: String(module.id),
+    skill_id: "python",
+    title: module.title,
+    order_index: module.id,
+    completed: Boolean(module.completed),
+    active: Boolean(module.active),
+  }));
+  const [modules, setModules] = useState<LearningModuleState[]>(fallbackModules);
   const [activeModuleId, setActiveModuleId] = useState(4);
+  const [codingProblems, setCodingProblems] = useState<CodingProblem[]>([]);
+  const [activeProblemId, setActiveProblemId] = useState("");
+  const [codeDraft, setCodeDraft] = useState("");
+  const [codingSummary, setCodingSummary] = useState<{ attempts: number; passed: number; best_score: number; latest: CodingAttempt | null } | null>(null);
+  const [codingAttempts, setCodingAttempts] = useState<CodingAttempt[]>([]);
+  const [codingResult, setCodingResult] = useState<CodingRunResult | null>(null);
+  const [codingBusy, setCodingBusy] = useState(false);
+  const [codingError, setCodingError] = useState("");
   const [aiInput, setAiInput] = useState("");
   const [aiMessages, setAiMessages] = useState([
     { role: "ai", text: "Functions let you split a problem into reusable pieces. Ask me anything about the current lesson and I’ll walk you through it step by step." },
@@ -1220,13 +1263,19 @@ function LearningPage({
       if (!user) return;
       try {
         setProgressError("");
-        const records = await getLearningProgress(user.id);
-        const completedIds = new Set(records.filter(record => record.completed).map(record => Number(record.module_id)));
-        setModules(MODULES_DATA.map(module => ({
+        const [records, fetchedModules] = await Promise.all([
+          getLearningProgress(user.id),
+          getLearningModules("python").catch(() => []),
+        ]);
+        const completedByModule = new Map(records.map(record => [String(record.module_id), record]));
+        const nextModules = (fetchedModules.length ? fetchedModules : fallbackModules).map(module => ({
           ...module,
-          completed: completedIds.has(module.id),
-          active: module.id === activeModuleId,
-        })));
+          completed: Boolean(completedByModule.get(String(module.id))?.completed),
+          active: String(module.id) === String(activeModuleId),
+        }));
+        if (active) {
+          setModules(nextModules);
+        }
       } catch (err) {
         if (active) setProgressError(err instanceof Error ? err.message : "Could not load learning progress");
       }
@@ -1237,8 +1286,55 @@ function LearningPage({
     };
   }, [activeModuleId, user]);
 
+  useEffect(() => {
+    let active = true;
+    const loadCoding = async () => {
+      if (!user) return;
+      const moduleId = String(activeModuleId);
+      try {
+        setCodingError("");
+        const problems = await getCodingProblems("python", moduleId).catch(() => []);
+        if (!active) return;
+        setCodingProblems(problems);
+        const nextProblemId = problems.find(problem => problem.id === activeProblemId)?.id || problems[0]?.id || "";
+        setActiveProblemId(nextProblemId);
+      } catch (err) {
+        if (active) setCodingError(err instanceof Error ? err.message : "Could not load coding workouts");
+      }
+    };
+    void loadCoding();
+    return () => {
+      active = false;
+    };
+  }, [activeModuleId, user]);
+
+  useEffect(() => {
+    let active = true;
+    const loadAttempts = async () => {
+      if (!user || !activeProblemId) return;
+      try {
+        const data = await getCodingAttempts(activeProblemId);
+        if (!active) return;
+        setCodingSummary(data.summary);
+        setCodingAttempts(data.attempts);
+        const draftKey = `workism_code_draft_${activeProblemId}`;
+        const stored = localStorage.getItem(draftKey);
+        const starter = codingProblems.find(problem => problem.id === activeProblemId)?.starter_code || "";
+        setCodeDraft(stored || starter);
+      } catch (err) {
+        if (active) setCodingError(err instanceof Error ? err.message : "Could not load coding attempts");
+      }
+    };
+    void loadAttempts();
+    return () => {
+      active = false;
+    };
+  }, [activeProblemId, user, codingProblems]);
+
   const activeModule = modules.find(module => module.id === activeModuleId) || modules[0];
   const activeIndex = Math.max(0, modules.findIndex(module => module.id === activeModuleId));
+  const previousModule = activeIndex > 0 ? modules[activeIndex - 1] : null;
+  const nextModule = activeIndex < modules.length - 1 ? modules[activeIndex + 1] : null;
   const completedCount = modules.filter(module => module.completed).length;
   const progress = Math.round((completedCount / modules.length) * 100);
   const lessonContent = {
@@ -1276,8 +1372,20 @@ function LearningPage({
                   ? ["Importing modules", "Organizing packages", "Standard library usage"]
                   : activeModule.id === 7
                     ? ["Reading and writing files", "Context managers", "Safe file handling"]
-                    : ["Catch exceptions", "Handle errors gracefully", "Avoid crashing your program"],
+      : ["Catch exceptions", "Handle errors gracefully", "Avoid crashing your program"],
   };
+  const currentProblem = codingProblems.find(problem => problem.id === activeProblemId) || codingProblems[0] || null;
+  const currentProgress = modules.find(module => module.id === activeModule.id);
+
+  useEffect(() => {
+    if (!currentProblem) {
+      setCodeDraft("");
+      return;
+    }
+    const draftKey = `workism_code_draft_${currentProblem.id}`;
+    const stored = localStorage.getItem(draftKey);
+    setCodeDraft(stored || currentProblem.starter_code || "");
+  }, [currentProblem?.id]);
 
   const markComplete = async () => {
     if (!user) return;
@@ -1287,16 +1395,68 @@ function LearningPage({
         user_id: user.id,
         skill_id: "python",
         module_id: String(activeModule.id),
-        completed: true,
+        lesson_completed: true,
+        practice_completed: true,
+        coding_completed: codingProblems.length === 0 ? true : Boolean(currentProgress?.coding_completed),
+        attempts: codingSummary?.attempts || currentProgress?.attempts || 0,
+        best_score: codingSummary?.best_score || currentProgress?.best_score || 0,
       });
-      setModules(current =>
-        current.map(module => (module.id === activeModule.id ? { ...module, completed: true } : module)),
-      );
-      if (activeModuleId < modules[modules.length - 1].id) {
-        setActiveModuleId(activeModuleId + 1);
+      const records = await getLearningProgress(user.id);
+      const completedIds = new Set(records.filter(record => record.completed).map(record => String(record.module_id)));
+      setModules(current => current.map(module => ({
+        ...module,
+        completed: completedIds.has(String(module.id)),
+        active: module.id === activeModuleId,
+      })));
+      if (nextModule) {
+        setActiveModuleId(Number(nextModule.id));
       }
     } catch (err) {
       setProgressError(err instanceof Error ? err.message : "Could not save lesson progress");
+    }
+  };
+
+  const handleCodeChange = (value: string) => {
+    setCodeDraft(value);
+    if (currentProblem) {
+      localStorage.setItem(`workism_code_draft_${currentProblem.id}`, value);
+    }
+  };
+
+  const refreshProgress = async () => {
+    if (!user) return;
+    const records = await getLearningProgress(user.id);
+    const completedIds = new Set(records.filter(record => record.completed).map(record => String(record.module_id)));
+    setModules(current => current.map(module => ({
+      ...module,
+      completed: completedIds.has(String(module.id)),
+      active: module.id === activeModuleId,
+    })));
+  };
+
+  const executeCode = async (mode: "run" | "submit") => {
+    if (!currentProblem) {
+      setCodingError("No coding workout is available for this module yet.");
+      return;
+    }
+    if (!codeDraft.trim()) {
+      setCodingError("Write some code before running the workout.");
+      return;
+    }
+    setCodingBusy(true);
+    setCodingError("");
+    try {
+      const response = mode === "run"
+        ? await runCodingWorkout(currentProblem.id, codeDraft, true)
+        : await submitCodingWorkout(currentProblem.id, codeDraft, true);
+      setCodingResult(response);
+      setCodingSummary(response.summary);
+      setCodingAttempts(current => response.summary.latest ? [response.summary.latest, ...current.filter(attempt => attempt.id !== response.summary.latest?.id)] : current);
+      await refreshProgress();
+    } catch (err) {
+      setCodingError(err instanceof Error ? err.message : "Coding workout failed");
+    } finally {
+      setCodingBusy(false);
     }
   };
 
@@ -1312,9 +1472,12 @@ function LearningPage({
     setAiMessages(current => [...current, { role: "user", text: message }]);
     setAiInput("");
     try {
+      const codingContext = currentProblem
+        ? `\n\nCoding problem:\n${currentProblem.title}\n${currentProblem.instructions}\n${currentProblem.example_input ? `Example input: ${currentProblem.example_input}\n` : ""}${currentProblem.expected_output ? `Expected output: ${currentProblem.expected_output}\n` : ""}`
+        : "";
       const response = await askAiTutor(
         message,
-        `${lessonContent.title}: ${lessonContent.overview}\n\nKey points:\n- ${lessonContent.points.join("\n- ")}`,
+        `${lessonContent.title}: ${lessonContent.overview}\n\nKey points:\n- ${lessonContent.points.join("\n- ")}${codingContext}`,
       );
       setAiMessages(current => [...current, { role: "ai", text: response.answer }]);
     } catch (err) {
@@ -1403,6 +1566,122 @@ function LearningPage({
                 </div>
               ))}
             </div>
+
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-violet-400">Coding Workout</div>
+                  <div className="text-sm text-white/65">Practice the current lesson with a real exercise.</div>
+                </div>
+                {currentProblem && (
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] text-white/45">
+                    {currentProblem.difficulty}
+                  </span>
+                )}
+              </div>
+
+              {currentProblem ? (
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <div className="text-sm font-semibold text-white">{currentProblem.title}</div>
+                    <div className="mt-1 text-sm leading-relaxed text-white/55">{currentProblem.description}</div>
+                    <div className="mt-3 rounded-xl border border-white/10 bg-[#0d1117] p-3 font-mono text-xs text-white/80">
+                      {currentProblem.instructions}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                      <div className="mb-1 text-[11px] uppercase tracking-widest text-white/35">Example Input</div>
+                      <div className="font-mono text-xs text-white/75">{currentProblem.example_input || "Not provided"}</div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                      <div className="mb-1 text-[11px] uppercase tracking-widest text-white/35">Expected Output</div>
+                      <div className="font-mono text-xs text-white/75">{currentProblem.expected_output || "Not provided"}</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-[#0d1117] overflow-hidden">
+                    <div className="flex items-center justify-between border-b border-white/5 px-3 py-2">
+                      <div className="flex items-center gap-2 text-xs text-white/40">
+                        <Code2 className="w-3.5 h-3.5" />
+                        <span>python</span>
+                      </div>
+                      <div className="text-[11px] text-white/30">Attempt #{(codingSummary?.attempts || 0) + 1}</div>
+                    </div>
+                    <textarea
+                      value={codeDraft}
+                      onChange={event => handleCodeChange(event.target.value)}
+                      className="min-h-[220px] w-full bg-transparent p-4 font-mono text-sm text-white/85 outline-none placeholder:text-white/20"
+                      spellCheck={false}
+                      placeholder="Write your solution here..."
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void executeCode("run")}
+                      disabled={codingBusy}
+                      className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-4 py-2 text-sm text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+                    >
+                      {codingBusy ? "Running..." : "Run Code"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void executeCode("submit")}
+                      disabled={codingBusy}
+                      className="rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.3)] hover:from-violet-500 hover:to-blue-500 disabled:opacity-50"
+                    >
+                      {codingBusy ? "Submitting..." : "Submit"}
+                    </button>
+                  </div>
+
+                  {codingError && <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{codingError}</div>}
+
+                  {codingResult && (
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-white/35">Result</div>
+                        <div className={`text-sm font-semibold ${codingResult.passed ? "text-emerald-300" : "text-amber-300"}`}>
+                          {codingResult.passed ? "Passed" : "Needs work"}
+                        </div>
+                        <div className="mt-1 text-xs text-white/45">
+                          {codingResult.passed_tests}/{codingResult.total_tests} tests passed
+                        </div>
+                        <div className="mt-2 text-xs text-white/35">Score: {codingResult.score}/100</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-white/35">Output</div>
+                        <pre className="whitespace-pre-wrap break-words text-xs text-white/65">{codingResult.stdout || codingResult.error || "No output yet"}</pre>
+                      </div>
+                    </div>
+                  )}
+
+                  {codingResult?.tests?.length ? (
+                    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-white/35">Test Cases</div>
+                      <div className="flex flex-col gap-2">
+                        {codingResult.tests.map((test, index) => (
+                          <div key={index} className="flex items-center justify-between gap-3 rounded-lg border border-white/5 bg-black/20 px-3 py-2 text-xs">
+                            <span className="text-white/55">Case {index + 1}</span>
+                            <span className={test.passed ? "text-emerald-300" : "text-red-300"}>{test.passed ? "Passed" : "Failed"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-xs text-white/40">
+                    Attempts so far: {codingSummary?.attempts || 0} | Passed attempts: {codingSummary?.passed || 0} | Best score: {codingSummary?.best_score || 0}/100
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-white/45">
+                  No coding workout is attached to this lesson yet.
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="p-4 border-t border-white/5 flex items-center justify-between">
@@ -1412,14 +1691,15 @@ function LearningPage({
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => setActiveModuleId(Math.max(1, activeIndex))}
+                onClick={() => previousModule && setActiveModuleId(Number(previousModule.id))}
                 disabled={activeIndex <= 0}
                 className="flex items-center gap-1 text-xs text-white/30 hover:text-white/60 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-3.5 h-3.5" /> Previous
               </button>
               <button
-                onClick={() => setActiveModuleId(Math.min(modules[modules.length - 1].id, activeModuleId + 1))}
+                onClick={() => nextModule && setActiveModuleId(Number(nextModule.id))}
+                disabled={!nextModule}
                 className="flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 text-white text-sm font-semibold hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_15px_rgba(124,58,237,0.3)]"
               >
                 Next Lesson <ChevronRight className="w-3.5 h-3.5" />
@@ -1878,6 +2158,7 @@ function EvaluationPage({ runtime }: { runtime: WorkismRuntime }) {
   const { evaluation, user, setCertificate, onNavigate } = runtime;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [eligibility, setEligibility] = useState<Awaited<ReturnType<typeof getCertificateEligibility>> | null>(null);
   const score = evaluation?.total_score ?? 85;
   const passed = evaluation ? Boolean(evaluation.passed) : true;
   const stages = [
@@ -1909,9 +2190,29 @@ function EvaluationPage({ runtime }: { runtime: WorkismRuntime }) {
     URL.revokeObjectURL(url);
   };
 
+  useEffect(() => {
+    let active = true;
+    const loadEligibility = async () => {
+      try {
+        const data = await getCertificateEligibility();
+        if (active) setEligibility(data);
+      } catch {
+        if (active) setEligibility(null);
+      }
+    };
+    void loadEligibility();
+    return () => {
+      active = false;
+    };
+  }, [evaluation?.id]);
+
   const handleCertificate = async () => {
     if (!user || !evaluation) {
       setError("Submit and evaluate a project first.");
+      return;
+    }
+    if (eligibility && !eligibility.eligible) {
+      setError(`Certificate locked: ${eligibility.missing_requirements.join(", ")}`);
       return;
     }
     setBusy(true);
@@ -2037,8 +2338,28 @@ function EvaluationPage({ runtime }: { runtime: WorkismRuntime }) {
 
             {error && <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
 
+            {eligibility && (
+              <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-white/55">
+                <div className="mb-2 font-semibold text-white">Certificate Eligibility</div>
+                <div className="flex flex-col gap-1.5">
+                  <div>{eligibility.profile_completed ? "✓" : "✕"} Profile complete</div>
+                  <div>{eligibility.modules_completed ? "✓" : "✕"} Modules complete</div>
+                  <div>{eligibility.project_submitted ? "✓" : "✕"} Project submitted</div>
+                  <div>{eligibility.evaluation_completed ? "✓" : "✕"} Evaluation complete</div>
+                  <div>{eligibility.score >= eligibility.minimum_score ? "✓" : "✕"} Score {eligibility.score}/{eligibility.minimum_score}</div>
+                  <div>{eligibility.originality_passed ? "✓" : "✕"} Originality check</div>
+                </div>
+                {!eligibility.eligible && (
+                  <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-[11px] text-amber-200">
+                    Missing: {eligibility.missing_requirements.join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-3">
               <button onClick={handleCertificate}
+                disabled={Boolean(eligibility && !eligibility.eligible)}
                 className="flex-1 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white text-sm font-semibold hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_20px_rgba(124,58,237,0.3)] flex items-center justify-center gap-2">
                 <Award className="w-4 h-4" /> {busy ? "Generating..." : "View Certificate"}
               </button>
@@ -2058,11 +2379,12 @@ function EvaluationPage({ runtime }: { runtime: WorkismRuntime }) {
 function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
   const { user, evaluation, certificate, onNavigate } = runtime;
   const [copied, setCopied] = useState(false);
-  const certificateId = certificate?.certificate_id || "WK-PY-DEMO";
-  const issued = certificate?.issued_at ? new Date(certificate.issued_at).toLocaleDateString() : "After evaluation";
-  const score = evaluation?.total_score ?? 85;
+  const certificateId = certificate?.certificate_id || "";
+  const issued = certificate?.issued_at ? new Date(certificate.issued_at).toLocaleDateString() : "";
+  const score = evaluation?.total_score ?? 0;
 
   const handleCopy = () => {
+    if (!certificateId) return;
     navigator.clipboard?.writeText(`${window.location.origin}/verify/${certificateId}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -2075,6 +2397,7 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
   };
 
   const handleShare = () => {
+    if (!certificateId) return;
     const url = `${window.location.origin}/verify/${certificateId}`;
     if (navigator.share) {
       navigator.share({ title: "WORKISM Certificate", text: `Verify my WORKISM certificate: ${certificateId}`, url });
@@ -2141,7 +2464,7 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
               <div className="text-sm text-white/40 mb-6">Presented to</div>
 
               <div className="text-4xl font-bold text-white mb-2" style={{ fontFamily: "Outfit", textShadow: "0 0 40px rgba(167,139,250,0.4)" }}>
-                {user?.name || "Vijay A"}
+                {user?.name || "Learner"}
               </div>
 
               <div className="w-24 h-0.5 bg-gradient-to-r from-transparent via-white/30 to-transparent mx-auto mb-6" />
@@ -2150,13 +2473,15 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
               <div className="text-2xl font-bold bg-gradient-to-r from-violet-300 to-blue-300 bg-clip-text text-transparent mb-2" style={{ fontFamily: "Outfit" }}>
                 Python Development
               </div>
-              <p className="text-sm text-white/40 mb-8">and scoring {score}/100 in the assessment.</p>
+              <p className="text-sm text-white/40 mb-8">
+                {certificate ? `and scoring ${score}/100 in the assessment.` : "Certificate is locked until eligibility is confirmed."}
+              </p>
 
               {/* Seal and details */}
               <div className="flex items-end justify-between mt-6">
                 <div className="text-left">
                   <div className="text-[10px] text-white/30 mb-0.5">Certificate ID</div>
-                  <div className="text-xs font-mono text-white/60">{certificateId}</div>
+                  <div className="text-xs font-mono text-white/60">{certificateId || "Pending eligibility"}</div>
                 </div>
 
                 {/* Seal */}
@@ -2171,7 +2496,7 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
 
                 <div className="text-right">
                   <div className="text-[10px] text-white/30 mb-0.5">Date Issued</div>
-                  <div className="text-xs text-white/60">{issued}</div>
+                  <div className="text-xs text-white/60">{issued || "Pending eligibility"}</div>
                 </div>
               </div>
             </div>
@@ -2183,10 +2508,10 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
           <GlassPanel className="p-5" glow>
             <h3 className="text-sm font-semibold text-white mb-4" style={{ fontFamily: "Outfit" }}>Your Certificate</h3>
             <div className="flex flex-col gap-2.5">
-              <button onClick={handleDownload} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white text-sm font-semibold hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_15px_rgba(124,58,237,0.3)]">
+              <button onClick={handleDownload} disabled={!certificate} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white text-sm font-semibold hover:from-violet-500 hover:to-blue-500 transition-all shadow-[0_0_15px_rgba(124,58,237,0.3)] disabled:cursor-not-allowed disabled:opacity-50">
                 <Download className="w-4 h-4" /> Download HTML
               </button>
-              <button onClick={handleShare} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-white/10 text-white/60 text-sm hover:border-violet-500/30 hover:text-violet-300 transition-all">
+              <button onClick={handleShare} disabled={!certificate} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-white/10 text-white/60 text-sm hover:border-violet-500/30 hover:text-violet-300 transition-all disabled:cursor-not-allowed disabled:opacity-50">
                 <Share2 className="w-4 h-4" /> Share on LinkedIn
               </button>
             </div>
@@ -2200,11 +2525,11 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
 
             <div className="flex flex-col gap-3 mb-5">
               {[
-                { label: "Certificate ID", value: certificateId },
-                { label: "Student", value: user?.name || "Vijay A" },
-                { label: "Skill", value: "Python Development" },
-                { label: "Score", value: `${score}/100` },
-                { label: "Issued", value: issued },
+                { label: "Certificate ID", value: certificateId || "Pending" },
+                { label: "Student", value: user?.name || "Learner" },
+                { label: "Skill", value: certificate?.skill || "Python Development" },
+                { label: "Score", value: certificate ? `${score}/100` : "Locked" },
+                { label: "Issued", value: issued || "Pending" },
               ].map(item => (
                 <div key={item.label} className="flex items-center justify-between gap-3">
                   <span className="text-xs text-white/35">{item.label}</span>
@@ -2213,13 +2538,23 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
               ))}
             </div>
 
-            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-500/8 border border-emerald-500/20">
-              <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-              <div>
-                <div className="text-sm font-semibold text-emerald-300">Verified</div>
-                <div className="text-[11px] text-white/40">This certificate is valid and issued by Workism.</div>
+            {certificate ? (
+              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-500/8 border border-emerald-500/20">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                <div>
+                  <div className="text-sm font-semibold text-emerald-300">Verified</div>
+                  <div className="text-[11px] text-white/40">This certificate is valid and issued by Workism.</div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
+                <Shield className="w-5 h-5 text-amber-400 flex-shrink-0" />
+                <div>
+                  <div className="text-sm font-semibold text-amber-300">Locked</div>
+                  <div className="text-[11px] text-white/40">Complete the backend eligibility checks to unlock your certificate.</div>
+                </div>
+              </div>
+            )}
 
             <button onClick={handleCopy}
               className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-white/10 text-sm text-white/50 hover:border-violet-500/30 hover:text-violet-300 transition-all">
@@ -2246,6 +2581,301 @@ function CertificatePage({ runtime }: { runtime: WorkismRuntime }) {
 }
 
 // ─── Cursor Glow ──────────────────────────────────────────────────────────────
+
+function LeaderboardPage({
+  onNavigate,
+  user,
+}: {
+  onNavigate: (s: Screen) => void;
+  user: WorkismUser | null;
+}) {
+  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      if (!user) return;
+      setBusy(true);
+      setError("");
+      try {
+        const data = await getLeaderboard();
+        if (active) setEntries(data.entries || []);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load leaderboard");
+      } finally {
+        if (active) setBusy(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={() => onNavigate("dashboard")} className="flex items-center gap-1.5 text-white/40 hover:text-white/70 transition-colors text-sm">
+          <ChevronLeft className="w-4 h-4" /> Back
+        </button>
+      </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "Outfit" }}>Leaderboard</h1>
+        <p className="text-white/45 text-sm">Rankings are based on completed modules, project scores, coding attempts, and certificates.</p>
+      </div>
+      {error && <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
+      {busy && <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-white/45">Loading leaderboard...</div>}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {entries.slice(0, 3).map(entry => (
+          <GlassPanel key={entry.user_id} className="p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-xs uppercase tracking-widest text-violet-400">Rank #{entry.rank}</div>
+              <div className="text-xs text-white/35">{entry.certificates} certificates</div>
+            </div>
+            <div className="text-xl font-bold text-white" style={{ fontFamily: "Outfit" }}>{entry.student}</div>
+            <div className="mt-1 text-xs text-white/40">{entry.institution || "Independent learner"}</div>
+            <div className="mt-4 text-3xl font-bold text-white">{entry.score}</div>
+            <div className="mt-1 text-xs text-white/35">points</div>
+          </GlassPanel>
+        ))}
+      </div>
+      <div className="mt-6 overflow-hidden rounded-2xl border border-white/10">
+        <div className="grid grid-cols-[80px_1fr_120px_120px_120px] gap-3 border-b border-white/10 bg-white/[0.03] px-4 py-3 text-xs uppercase tracking-widest text-white/35">
+          <div>Rank</div>
+          <div>Learner</div>
+          <div>Score</div>
+          <div>Modules</div>
+          <div>Certificates</div>
+        </div>
+        <div className="divide-y divide-white/5 bg-white/[0.02]">
+          {entries.map(entry => (
+            <div key={entry.user_id} className="grid grid-cols-[80px_1fr_120px_120px_120px] gap-3 px-4 py-3 text-sm">
+              <div className="text-white/55">#{entry.rank}</div>
+              <div>
+                <div className="font-medium text-white">{entry.student}</div>
+                <div className="text-xs text-white/35">{entry.institution || "Learner"}</div>
+              </div>
+              <div className="text-white/70">{entry.score}</div>
+              <div className="text-white/70">{entry.completed_modules}</div>
+              <div className="text-white/70">{entry.certificates}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function CommunityPage({
+  onNavigate,
+  user,
+}: {
+  onNavigate: (s: Screen) => void;
+  user: WorkismUser | null;
+}) {
+  const [posts, setPosts] = useState<CommunityPost[]>([]);
+  const [selectedPostId, setSelectedPostId] = useState("");
+  const [comments, setComments] = useState<CommunityComment[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [commentLoading, setCommentLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [category, setCategory] = useState<"Discussion" | "Question" | "Project" | "Announcement">("Discussion");
+  const [commentBody, setCommentBody] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const loadPosts = async () => {
+      if (!user) return;
+      setLoading(true);
+      setError("");
+      try {
+        const data = await getCommunityPosts();
+        if (!active) return;
+        setPosts(data);
+        setSelectedPostId(current => current || data[0]?.id || "");
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load community feed");
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void loadPosts();
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    let active = true;
+    const loadComments = async () => {
+      if (!selectedPostId) return;
+      setCommentLoading(true);
+      try {
+        const data = await getCommunityComments(selectedPostId);
+        if (active) setComments(data);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load comments");
+      } finally {
+        if (active) setCommentLoading(false);
+      }
+    };
+    void loadComments();
+    return () => {
+      active = false;
+    };
+  }, [selectedPostId]);
+
+  const submitPost = async () => {
+    if (!title.trim() || !body.trim()) {
+      setError("Add a title and body for your post.");
+      return;
+    }
+    try {
+      setLoading(true);
+      const post = await createCommunityPost({ title, body, category });
+      setPosts(current => [post, ...current]);
+      setSelectedPostId(post.id);
+      setTitle("");
+      setBody("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create post");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitComment = async () => {
+    if (!selectedPostId || !commentBody.trim()) return;
+    try {
+      setCommentLoading(true);
+      const comment = await createCommunityComment(selectedPostId, commentBody);
+      setComments(current => [...current, comment]);
+      setCommentBody("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not post comment");
+    } finally {
+      setCommentLoading(false);
+    }
+  };
+
+  const selectedPost = posts.find(post => post.id === selectedPostId) || posts[0] || null;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={() => onNavigate("dashboard")} className="flex items-center gap-1.5 text-white/40 hover:text-white/70 transition-colors text-sm">
+          <ChevronLeft className="w-4 h-4" /> Back
+        </button>
+      </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "Outfit" }}>Community</h1>
+        <p className="text-white/45 text-sm">Share public learning activity and project discussion without exposing private details.</p>
+      </div>
+      {error && <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        <div className="flex flex-col gap-5">
+          <GlassPanel className="p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white" style={{ fontFamily: "Outfit" }}>Public feed</h3>
+              {loading && <span className="text-xs text-white/35">Updating...</span>}
+            </div>
+            <div className="flex flex-col gap-3">
+              {posts.map(post => (
+                <button
+                  key={post.id}
+                  type="button"
+                  onClick={() => setSelectedPostId(post.id)}
+                  className={`rounded-xl border p-4 text-left transition-colors ${selectedPostId === post.id ? "border-violet-500/30 bg-violet-500/10" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.05]"}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-white">{post.title}</div>
+                    <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/35">{post.category}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-white/35">by {post.user_name}</div>
+                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-white/60">{post.body}</p>
+                </button>
+              ))}
+              {!posts.length && !loading && <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-white/45">No posts yet. Start the conversation below.</div>}
+            </div>
+          </GlassPanel>
+
+          {selectedPost && (
+            <GlassPanel className="p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-widest text-violet-400">{selectedPost.category}</div>
+                  <h3 className="mt-1 text-lg font-bold text-white">{selectedPost.title}</h3>
+                </div>
+                <div className="text-xs text-white/35">{selectedPost.reply_count} replies</div>
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/65">{selectedPost.body}</p>
+              <div className="mt-3 text-xs text-white/35">Posted by {selectedPost.user_name}</div>
+            </GlassPanel>
+          )}
+
+          <GlassPanel className="p-5">
+            <h3 className="text-sm font-semibold text-white mb-4" style={{ fontFamily: "Outfit" }}>Create post</h3>
+            <div className="grid gap-3">
+              <input value={title} onChange={event => setTitle(event.target.value)} placeholder="Post title" className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/25 focus:border-violet-500/40" />
+              <select value={category} onChange={event => setCategory(event.target.value as typeof category)} className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500/40">
+                {["Discussion", "Question", "Project", "Announcement"].map(item => <option key={item} value={item} className="bg-[#0d0d28]">{item}</option>)}
+              </select>
+              <textarea value={body} onChange={event => setBody(event.target.value)} placeholder="Share a lesson, project, or question..." className="min-h-32 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/25 focus:border-violet-500/40" />
+              <button type="button" onClick={() => void submitPost()} className="rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-4 py-2.5 text-sm font-semibold text-white">Publish</button>
+            </div>
+          </GlassPanel>
+        </div>
+
+        <div className="flex flex-col gap-5">
+          <GlassPanel className="p-5">
+            <h3 className="text-sm font-semibold text-white mb-4" style={{ fontFamily: "Outfit" }}>Comments</h3>
+            <div className="mb-4 flex flex-col gap-3">
+              {comments.map(comment => (
+                <div key={comment.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium text-white">{comment.user_name}</div>
+                    <div className="text-[11px] text-white/35">{new Date(comment.created_at).toLocaleDateString()}</div>
+                  </div>
+                  <p className="mt-2 text-sm leading-relaxed text-white/60">{comment.body}</p>
+                </div>
+              ))}
+              {commentLoading && <div className="text-xs text-white/35">Loading comments...</div>}
+              {!comments.length && !commentLoading && <div className="text-sm text-white/45">No comments yet.</div>}
+            </div>
+            <textarea value={commentBody} onChange={event => setCommentBody(event.target.value)} placeholder="Write a reply..." className="min-h-28 w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/25 focus:border-violet-500/40" />
+            <button type="button" onClick={() => void submitComment()} className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-white/70 hover:border-violet-500/25 hover:text-white">Reply</button>
+          </GlassPanel>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function SettingsPage({
+  user,
+  onNavigate,
+  setUser,
+}: {
+  user: WorkismUser | null;
+  onNavigate: (s: Screen) => void;
+  setUser: (user: WorkismUser | null) => void;
+}) {
+  if (!user) return null;
+  return (
+    <ProfilePage
+      user={user}
+      variant="settings"
+      onComplete={async updated => {
+        setUser(updated);
+      }}
+      onCancel={() => onNavigate("dashboard")}
+    />
+  );
+}
 
 function CursorGlow() {
   const [pos, setPos] = useState({ x: -999, y: -999 });
@@ -2564,11 +3194,14 @@ function ProfilePage({
   user,
   onComplete,
   onCancel,
+  variant = "onboarding",
 }: {
   user: WorkismUser;
   onComplete: (user: WorkismUser) => Promise<void>;
   onCancel: () => void;
+  variant?: "onboarding" | "settings";
 }) {
+  const loadedUserId = useRef(user.id);
   const [fullName, setFullName] = useState(user.name || "");
   const [age, setAge] = useState(user.age ? String(user.age) : "");
   const [mobileNumber, setMobileNumber] = useState(user.mobileNumber || "");
@@ -2581,6 +3214,8 @@ function ProfilePage({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    if (loadedUserId.current === user.id) return;
+    loadedUserId.current = user.id;
     setFullName(user.name || "");
     setAge(user.age ? String(user.age) : "");
     setMobileNumber(user.mobileNumber || "");
@@ -2673,13 +3308,15 @@ function ProfilePage({
       <div className="relative z-10 mx-auto grid min-h-[calc(100vh-8rem)] max-w-5xl items-center gap-8 lg:grid-cols-[1fr_560px]">
         <div>
           <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-300">
-            <Users className="w-3 h-3" /> Complete your profile
+            <Users className="w-3 h-3" /> {variant === "settings" ? "Profile settings" : "Complete your profile"}
           </div>
           <h1 className="mb-5 text-4xl font-bold leading-tight text-white lg:text-6xl" style={{ fontFamily: "Outfit" }}>
-            Finish setup, then you’re in.
+            {variant === "settings" ? "Update your account details." : "Finish setup, then you’re in."}
           </h1>
           <p className="max-w-xl text-base leading-relaxed text-white/50">
-            We use this profile for progress tracking, submissions, evaluations, and certificates. Your email stays tied to the authenticated Firebase account.
+            {variant === "settings"
+              ? "Keep your profile current so submissions, progress, and certificates stay accurate."
+              : "We use this profile for progress tracking, submissions, evaluations, and certificates. Your email stays tied to the authenticated Firebase account."}
           </p>
         </div>
 
@@ -2732,7 +3369,7 @@ function ProfilePage({
             {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{error}</div>}
 
             <button disabled={busy} className="mt-1 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.35)] transition-all hover:from-violet-500 hover:to-blue-500 disabled:cursor-not-allowed disabled:opacity-60">
-              {busy ? "Saving profile..." : "Save Profile"}
+              {busy ? "Saving profile..." : variant === "settings" ? "Save Changes" : "Save Profile"}
             </button>
           </form>
         </GlassPanel>
@@ -2839,7 +3476,7 @@ export default function App() {
           setUser(null);
           setPendingProfile(null);
           localStorage.removeItem("workism_user");
-          if (screen !== "landing" && screen !== "auth") setScreen("auth");
+          setScreen(current => (current === "landing" ? current : "auth"));
           return;
         }
         const workismUser = firebaseUserToWorkismUser(firebaseUser);
@@ -2848,11 +3485,12 @@ export default function App() {
         const mergedUser = profile ? { ...syncedUser, ...profile } : syncedUser;
         if (!active) return;
         setUser(mergedUser);
-        if (pendingProfile || !hasCompleteProfile(mergedUser)) {
+        if (!hasCompleteProfile(mergedUser)) {
           setPendingProfile(mergedUser);
           setScreen("profile");
-        } else if (screen === "auth" || screen === "landing") {
-          setScreen("dashboard");
+        } else {
+          setPendingProfile(null);
+          setScreen(current => (current === "auth" || current === "landing" ? "dashboard" : current));
         }
       } catch (err) {
         console.error("Failed to sync Firebase user", err);
@@ -2864,7 +3502,7 @@ export default function App() {
       active = false;
       unsubscribe();
     };
-  }, [pendingProfile, screen]);
+  }, []);
 
   const navigate = (nextScreen: Screen) => {
     if (!user && nextScreen !== "landing" && nextScreen !== "auth") {
@@ -2924,6 +3562,9 @@ export default function App() {
       case "submission": return <SubmissionPage runtime={runtime} />;
       case "evaluation": return <EvaluationPage runtime={runtime} />;
       case "certificate": return <CertificatePage runtime={runtime} />;
+      case "leaderboard": return <LeaderboardPage onNavigate={navigate} user={user} />;
+      case "community": return <CommunityPage onNavigate={navigate} user={user} />;
+      case "settings": return <SettingsPage user={user} onNavigate={navigate} setUser={setUser} />;
       default: return <DashboardHome onNavigate={navigate} user={user} />;
     }
   };

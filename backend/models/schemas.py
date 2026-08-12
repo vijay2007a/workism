@@ -46,7 +46,12 @@ class ProgressRequest(BaseModel):
     user_id: str
     skill_id: str
     module_id: str
-    completed: bool = True
+    lesson_completed: bool | None = None
+    practice_completed: bool | None = None
+    coding_completed: bool | None = None
+    completed: bool | None = None
+    attempts: int | None = Field(default=None, ge=0)
+    best_score: int | None = Field(default=None, ge=0, le=100)
 
 
 class AssessmentRequest(BaseModel):
@@ -77,6 +82,7 @@ class SubmissionRequest(BaseModel):
     assessment_id: str | None = None
     repository_url: HttpUrl
     branch: str = "main"
+    main_file: str | None = Field(default=None, max_length=200)
 
 
 class EvaluationRequest(BaseModel):
@@ -115,3 +121,85 @@ class StructuredEvaluation(BaseModel):
 class CertificateRequest(BaseModel):
     user_id: str
     evaluation_id: str
+
+
+class CodingRunRequest(BaseModel):
+    problem_id: str = Field(min_length=1)
+    language: Literal["python"] = "python"
+    code: str = Field(min_length=1, max_length=20_000)
+    ai_help_used: bool = False
+
+
+class CodingSubmitRequest(CodingRunRequest):
+    pass
+
+
+class CodingAttemptRecord(BaseModel):
+    id: str
+    user_id: str
+    problem_id: str
+    module_id: str
+    language: str
+    code: str
+    output: str | None = None
+    error: str | None = None
+    passed: bool
+    attempt_number: int
+    total_tests: int
+    passed_tests: int
+    score: int = Field(ge=0, le=100)
+    ai_help_used: bool = False
+    created_at: str
+
+
+class CommunityPostRequest(BaseModel):
+    title: str = Field(min_length=3, max_length=120)
+    body: str = Field(min_length=3, max_length=5000)
+    category: Literal["Discussion", "Question", "Project", "Announcement"] = "Discussion"
+    tags: list[str] = Field(default_factory=list)
+
+
+class CommunityCommentRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class UnderstandingAnswerRequest(BaseModel):
+    answers: list[str] = Field(default_factory=list)
+
+
+class CertificateEligibilityResponse(BaseModel):
+    eligible: bool
+    modules_completed: bool
+    coding_completed: bool
+    project_submitted: bool
+    evaluation_completed: bool
+    profile_completed: bool
+    originality_passed: bool
+    originality_signal: int
+    originality_threshold: int
+    score: int
+    minimum_score: int
+    missing_requirements: list[str] = Field(default_factory=list)
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    user_id: str
+    student: str
+    institution: str | None = None
+    score: int
+    completed_modules: int
+    certificates: int
+
+
+class CommunityPost(BaseModel):
+    id: str
+    user_id: str
+    user_name: str
+    institution: str | None = None
+    title: str
+    body: str
+    category: str
+    tags: list[str] = Field(default_factory=list)
+    created_at: str
+    reply_count: int = 0

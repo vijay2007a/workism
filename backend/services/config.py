@@ -58,5 +58,14 @@ class Settings:
     def ollama_model(self) -> str:
         return os.getenv("OLLAMA_MODEL", "qwen2.5-coder:14b")
 
+    @property
+    def originality_max_ai_signal(self) -> int:
+        raw = os.getenv("WORKISM_ORIGINALITY_MAX_AI_SIGNAL", "65")
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 65
+        return max(0, min(100, value))
+
 
 settings = Settings()

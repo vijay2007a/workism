@@ -78,8 +78,121 @@ export type LearningProgressRecord = {
   user_id: string;
   skill_id: string;
   module_id: string;
-  completed: boolean;
+  lesson_completed?: boolean;
+  practice_completed?: boolean;
+  coding_completed?: boolean;
+  completed?: boolean;
+  attempts?: number;
+  best_score?: number;
   updated_at?: string;
+};
+
+export type LearningModule = {
+  id: string;
+  skill_id: string;
+  title: string;
+  order_index: number;
+  overview?: string;
+  lesson?: string;
+  examples?: string[];
+  practice?: string[];
+  coding_problem_ids?: string[];
+};
+
+export type CodingProblem = {
+  id: string;
+  skill_id: string;
+  module_id: string;
+  title: string;
+  difficulty: string;
+  description: string;
+  instructions: string;
+  entrypoint: string;
+  language: "python";
+  starter_code: string;
+  example_input?: string;
+  expected_output?: string;
+  tests: Array<{ args?: unknown[]; kwargs?: Record<string, unknown>; expected: unknown }>;
+  hints: string[];
+};
+
+export type CodingAttempt = {
+  id: string;
+  user_id: string;
+  problem_id: string;
+  module_id: string;
+  language: string;
+  code: string;
+  output?: string;
+  error?: string;
+  passed: boolean;
+  attempt_number: number;
+  total_tests: number;
+  passed_tests: number;
+  score: number;
+  ai_help_used: boolean;
+  kind?: string;
+  created_at: string;
+};
+
+export type CodingSummary = {
+  attempts: number;
+  passed: number;
+  best_score: number;
+  latest: CodingAttempt | null;
+  problem_id?: string | null;
+};
+
+export type CodingRunResult = {
+  problem: CodingProblem;
+  attempt: CodingAttempt;
+  tests: Array<{ args?: unknown[]; kwargs?: Record<string, unknown>; expected: unknown; actual: unknown; passed: boolean }>;
+  stdout: string;
+  error?: string | null;
+  passed: boolean;
+  passed_tests: number;
+  total_tests: number;
+  score: number;
+  summary: CodingSummary;
+};
+
+export type DashboardActivity = {
+  type: string;
+  text: string;
+  meta?: string;
+  created_at?: string;
+};
+
+export type LeaderboardEntry = {
+  rank: number;
+  user_id: string;
+  student: string;
+  institution?: string;
+  score: number;
+  completed_modules: number;
+  certificates: number;
+};
+
+export type CommunityPost = {
+  id: string;
+  user_id: string;
+  user_name: string;
+  institution?: string;
+  title: string;
+  body: string;
+  category: string;
+  tags: string[];
+  created_at: string;
+  reply_count: number;
+};
+
+export type CommunityComment = {
+  id: string;
+  post_id: string;
+  user_id: string;
+  user_name: string;
+  body: string;
+  created_at: string;
 };
 
 export type RepositoryMetadata = {
@@ -314,6 +427,9 @@ export function certificateDownloadUrl(certificateId: string) {
 }
 
 export async function getLearningProgress(userId: string) {
+  if (API_BASE_URL) {
+    return api<LearningProgressRecord[]>(`/learning/progress/${userId}`);
+  }
   if (!firebaseConfigured || !db) {
     throw new Error(firebaseConfigurationMessage());
   }
@@ -322,6 +438,12 @@ export async function getLearningProgress(userId: string) {
 }
 
 export async function saveLearningProgress(record: LearningProgressRecord) {
+  if (API_BASE_URL) {
+    return api<LearningProgressRecord>("/learning/progress", {
+      method: "POST",
+      body: record,
+    });
+  }
   if (!firebaseConfigured || !db) {
     throw new Error(firebaseConfigurationMessage());
   }
@@ -336,6 +458,10 @@ export async function saveLearningProgress(record: LearningProgressRecord) {
 }
 
 export async function getDashboardStats(userId: string): Promise<DashboardStats> {
+  if (API_BASE_URL) {
+    const data = await api<DashboardStats & { recentActivity?: DashboardActivity[] }>("/dashboard/stats");
+    return data;
+  }
   if (!firebaseConfigured || !db) {
     throw new Error(firebaseConfigurationMessage());
   }
@@ -365,4 +491,82 @@ export async function askAiTutor(message: string, context: string) {
     method: "POST",
     body: { message, context },
   });
+}
+
+export async function getLearningModules(skillId: string) {
+  if (API_BASE_URL) {
+    return api<LearningModule[]>(`/learning/${skillId}/modules`);
+  }
+  return [];
+}
+
+export async function getCodingProblems(skillId = "python", moduleId?: string) {
+  const suffix = moduleId ? `?skill_id=${encodeURIComponent(skillId)}&module_id=${encodeURIComponent(moduleId)}` : `?skill_id=${encodeURIComponent(skillId)}`;
+  return api<CodingProblem[]>(`/coding/problems${suffix}`);
+}
+
+export async function getCodingProblem(problemId: string) {
+  return api<CodingProblem>(`/coding/problems/${problemId}`);
+}
+
+export async function getCodingAttempts(problemId?: string) {
+  const suffix = problemId ? `?problem_id=${encodeURIComponent(problemId)}` : "";
+  return api<{ user_id: string; attempts: CodingAttempt[]; summary: CodingSummary }>(`/coding/attempts${suffix}`);
+}
+
+export async function runCodingWorkout(problemId: string, code: string, aiHelpUsed = false) {
+  return api<CodingRunResult>("/coding/run", {
+    method: "POST",
+    body: { problem_id: problemId, language: "python", code, ai_help_used: aiHelpUsed },
+  });
+}
+
+export async function submitCodingWorkout(problemId: string, code: string, aiHelpUsed = false) {
+  return api<CodingRunResult>("/coding/submit", {
+    method: "POST",
+    body: { problem_id: problemId, language: "python", code, ai_help_used: aiHelpUsed },
+  });
+}
+
+export async function getLeaderboard() {
+  return api<{ entries: LeaderboardEntry[] }>("/leaderboard");
+}
+
+export async function getCommunityPosts() {
+  return api<CommunityPost[]>("/community/posts");
+}
+
+export async function createCommunityPost(payload: { title: string; body: string; category?: "Discussion" | "Question" | "Project" | "Announcement"; tags?: string[] }) {
+  return api<CommunityPost>("/community/posts", {
+    method: "POST",
+    body: { category: payload.category || "Discussion", title: payload.title, body: payload.body, tags: payload.tags || [] },
+  });
+}
+
+export async function getCommunityComments(postId: string) {
+  return api<CommunityComment[]>(`/community/posts/${postId}/comments`);
+}
+
+export async function createCommunityComment(postId: string, body: string) {
+  return api<CommunityComment>(`/community/posts/${postId}/comments`, {
+    method: "POST",
+    body: { body },
+  });
+}
+
+export async function getCertificateEligibility() {
+  return api<{
+    eligible: boolean;
+    modules_completed: boolean;
+    coding_completed: boolean;
+    project_submitted: boolean;
+    evaluation_completed: boolean;
+    profile_completed: boolean;
+    originality_passed: boolean;
+    originality_signal: number;
+    originality_threshold: number;
+    score: number;
+    minimum_score: number;
+    missing_requirements: string[];
+  }>("/certificates/eligibility");
 }
